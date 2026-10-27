@@ -48,7 +48,7 @@
       });
       return [...new Set(ids)];
     }
-    const tokens = String(t.participantes || '').split(/[\s,;]+/).filter(Boolean);
+    const tokens = sinZonas(t.participantes).split(/[\s,;]+/).filter(Boolean);
     const ids = new Set();
     (tokens.length ? tokens : [t.liga_id]).forEach(k => {
       const K = String(k).toUpperCase();
@@ -57,6 +57,30 @@
       else if (porId('equipos', K)) ids.add(K);
     });
     return [...ids];
+  }
+  // Fase de grupos: la columna "zonas" reparte los equipos ("Zona A: CL02, CL04; Zona B: CL05, CL07").
+  // "participantes" sigue con la lista completa, así la API valida igual que siempre.
+  const esGrupos = t => !!t && String(t.tipo || '').toLowerCase() === 'grupos';
+  const sinZonas = texto => String(texto || '').replace(/(^|;)\s*[^:;,]*:/g, '$1 ');
+  function zonasDeTexto(texto) {
+    const r = { nombres: [], club: {}, liga: {} };
+    String(texto || '').split(';').forEach(seg => {
+      const m = seg.match(/^([^:]+):(.*)$/);
+      if (!m) return;
+      const n = m[1].trim();
+      r.nombres.push(n);
+      m[2].split(/[\s,]+/).filter(Boolean).forEach(k => { const K = k.toUpperCase(); if (/^L\d+$/.test(K)) r.liga[K] = n; else r.club[K] = n; });
+    });
+    return r;
+  }
+  function gruposDe(t) {
+    if (!esGrupos(t)) return [{ nombre: '', eids: participantesDe(t) }];
+    const out = [];
+    String(t.zonas || '').split(';').forEach(seg => {
+      const m = seg.match(/^([^:]+):(.*)$/);
+      if (m && m[2].trim()) out.push({ nombre: m[1].trim(), eids: participantesDe(Object.assign({}, t, { participantes: m[2], clasifica: '' })) });
+    });
+    return out;
   }
   const ligasDeTorneo = t => [...new Set(participantesDe(t).map(eid => (porId('clubes', (porId('equipos', eid) || {}).club_id) || {}).liga_id).filter(Boolean))];
   const misLigas = () => esDev() ? T('ligas') : T('ligas').filter(l => S.T.usuario.ligas.indexOf(String(l.id)) >= 0);
@@ -661,8 +685,8 @@
         return [
           { k: 'torneo_id', l: 'Torneo', t: 'select', op: opTorneos, req: 1 },
           { k: 'fecha_nro', l: 'Número de fecha', t: 'num', req: 1, ancho: 'medio' },
-          ...(t && String(t.tipo || '').toLowerCase() === 'llave' ? [
-            { k: 'fase', l: 'Fase', ph: 'Ej.: Cuartos de final', ancho: 'medio' },
+          ...(t && (esLlave(t) || esGrupos(t)) ? [
+            { k: 'fase', l: 'Fase', ph: 'Ej.: Cuartos de final', ancho: 'medio', ayuda: esGrupos(t) ? 'Vacío = partido de la fase de grupos. Para los playoffs: Cuartos de final, Semifinal, Final.' : '' },
             { k: 'llave', l: 'Número de llave', t: 'num', ancho: 'medio', ayuda: 'Ida y vuelta llevan el mismo número.' },
             { k: 'penales', l: 'Penales (local-visitante)', ph: 'Ej.: 4-3', ancho: 'medio' }] : []),
           { k: 'estado', l: 'Estado', t: 'select', op: ESTADOS.map(e => [e, e]), ancho: 'medio' },
@@ -675,7 +699,126 @@
         ];
       },
       puedeBorrar: p => !T('eventos').some(e => e.partido_id === p.id),
-      confirmarBorrar: '¿Borrar este partido del fixture?'
+      confirmarBorrar: '¿Borrar este partido del fixture?',
+      pie: (() => {
+        const t = porId('torneos', tid);
+        if (!t || esLlave(t)) return '';
+        return `<p class="nota" style="margin-left:0"><button type="button" class="boton" id="btn-armar-fixture">Armar fixture automático</button> Todos contra todos${esGrupos(t) ? ' dentro de cada zona' : ''}.</p>`
+          + (esGrupos(t) && Number(t.playoffs) ? `<p class="nota" style="margin-left:0"><button type="button" class="boton" id="btn-armar-playoffs">Armar cruces de playoffs</button> Crea la próxima ronda con los equipos ya definidos.</p>` : '');
+      })(),
+      alMontar: $x => {
+        const b = $x.querySelector('#btn-armar-fixture'); if (b) b.addEventListener('click', () => armarFixture(porId('torneos', tid)));
+        const c = $x.querySelector('#btn-armar-playoffs'); if (c) c.addEventListener('click', () => armarPlayoffs(porId('torneos', tid)));
+      }
+    });
+  }
+  const esLlave = t => !!t && String(t.tipo || '').toLowerCase() === 'llave';
+
+  // Todos contra todos (método del círculo): devuelve las fechas, cada una con sus cruces [local, visitante].
+  // Próxima ronda de playoffs de una fase de grupos: los cruces los calcula el sitio (misma lógica que el cuadro).
+  async function armarPlayoffs(t) {
+    if (!t) return;
+    if (!window.LF || !window.LF.crucesPendientes) { aviso('Recargá la página e intentá de nuevo.'); return; }
+    let r;
+    try { r = await window.LF.crucesPendientes(t.id); } catch (e) { aviso('No se pudieron calcular los cruces.'); return; }
+    if (!r) { aviso('Elegí cuántos pasan de cada zona en Torneos > ' + t.nombre + '.'); return; }
+    if (r.terminado) { aviso('Los playoffs ya tienen todos sus partidos cargados.'); return; }
+    if (!r.cruces.length) { aviso(`Todavía no se sabe quién juega ${r.ronda}: faltan resultados.`); return; }
+    const ps = T('partidos').filter(p => p.torneo_id === t.id);
+    const base = Math.max(0, ...ps.map(p => num(p.fecha_nro) || 0));
+    const llaveBase = Math.max(0, ...ps.filter(p => String(p.fase || '').trim()).map(p => num(p.llave) || 0));
+    abrirCajon('Armar cruces de playoffs', `<form id="form-po" novalidate>
+      <h3 style="margin:0 0 8px">${esc(r.ronda)}</h3>
+      ${r.provisorio ? '<p class="error-form">La fase de grupos todavía no terminó: los cruces salen de la tabla actual.</p>' : ''}
+      <ul class="lista-cruces">${r.cruces.map(c => `<li>${esc(c.na)} <span>vs</span> ${esc(c.nb)}</li>`).join('')}</ul>
+      ${r.faltan ? `<p class="nota" style="margin:0 0 8px">Quedan ${r.faltan} cruces de esta ronda sin definir: los podés crear después.</p>` : ''}
+      <div class="grilla-form">
+        <div class="campo campo--medio"><label for="po-vueltas">Formato</label><select id="po-vueltas"><option value="1">Partido único</option><option value="2">Ida y vuelta</option></select><small>En ida y vuelta, la vuelta es en la cancha del mejor ubicado.</small></div>
+        <div class="campo campo--medio"><label for="po-inicio">Fecha</label><input type="date" id="po-inicio"><small>Opcional. La vuelta, una semana después.</small></div>
+      </div>
+      <div class="acciones acciones--form"><button class="boton boton--primario" type="submit" data-guardar>Crear partidos</button></div></form>`,
+    (cuerpo, cerrar) => {
+      const form = cuerpo.querySelector('#form-po');
+      form.addEventListener('submit', async ev => {
+        ev.preventDefault();
+        const vueltas = Number(form.querySelector('#po-vueltas').value);
+        const inicio = form.querySelector('#po-inicio').value;
+        const dia = k => { if (!inicio) return ''; const d = new Date(inicio + 'T12:00:00'); d.setDate(d.getDate() + 7 * k); return d.toISOString().slice(0, 10); };
+        const filas = [];
+        r.cruces.forEach((c, i) => {
+          const llave = llaveBase + i + 1;
+          // Partido único o vuelta: de local el mejor ubicado (a).
+          if (vueltas === 2) filas.push({ torneo_id: t.id, fecha_nro: base + 1, local_id: c.b, visitante_id: c.a, fecha_programada: dia(0), fase: r.ronda, llave, estado: 'Programado' });
+          filas.push({ torneo_id: t.id, fecha_nro: base + vueltas, local_id: c.a, visitante_id: c.b, fecha_programada: dia(vueltas - 1), fase: r.ronda, llave, estado: 'Programado' });
+        });
+        for (let i = 0; i < filas.length; i += 40) {
+          const ok = await guardar(filas.slice(i, i + 40).map(fila => ({ op: 'crear', tabla: 'Partidos', fila })), i + 40 >= filas.length ? `${r.ronda}: ${filas.length === 1 ? 'partido creado' : filas.length + ' partidos creados'}.` : '');
+          if (!ok) return;
+        }
+        cerrar(); vistaPanel();
+      });
+    });
+  }
+
+  function todosContraTodos(eids) {
+    const L = eids.slice();
+    if (L.length % 2) L.push(null);
+    const n = L.length, fechas = [];
+    for (let r = 0; r < n - 1; r++) {
+      const f = [];
+      for (let i = 0; i < n / 2; i++) {
+        const a = L[i], b = L[n - 1 - i];
+        if (a && b) f.push(i === 0 && r % 2 ? [b, a] : [a, b]);
+      }
+      fechas.push(f);
+      L.splice(1, 0, L.pop());
+    }
+    return fechas;
+  }
+  function armarFixture(t) {
+    if (!t) return;
+    const grupos = gruposDe(t).filter(g => g.eids.length >= 2);
+    const yaHay = T('partidos').filter(p => p.torneo_id === t.id && !String(p.fase || '').trim()).length;
+    if (!grupos.length) { aviso('El torneo necesita al menos 2 equipos.'); return; }
+    abrirCajon('Armar fixture automático', `<form id="form-armar" novalidate>
+      <p class="nota" style="margin:0 0 12px">${grupos.map(g => `${g.nombre ? esc(g.nombre) + ': ' : ''}${g.eids.length} equipos`).join(' · ')}</p>
+      ${yaHay ? `<p class="error-form">Este torneo ya tiene ${yaHay} partidos cargados. El fixture nuevo se agrega a continuación, sin borrar nada.</p>` : ''}
+      <div class="grilla-form">
+        <div class="campo campo--medio"><label for="fx-vueltas">Formato</label><select id="fx-vueltas"><option value="1">Solo ida</option><option value="2">Ida y vuelta</option></select></div>
+        <div class="campo campo--medio"><label for="fx-inicio">Primera fecha</label><input type="date" id="fx-inicio"><small>Opcional. Las demás van una por semana.</small></div>
+      </div>
+      <p class="nota" id="fx-resumen" style="margin:8px 0 0"></p>
+      <div class="acciones acciones--form"><button class="boton boton--primario" type="submit" data-guardar>Crear partidos</button></div></form>`,
+    (cuerpo, cerrar) => {
+      const form = cuerpo.querySelector('#form-armar');
+      const armar = () => {
+        const vueltas = Number(form.querySelector('#fx-vueltas').value);
+        const inicio = form.querySelector('#fx-inicio').value;
+        const base = yaHay ? Math.max(0, ...T('partidos').filter(p => p.torneo_id === t.id).map(p => num(p.fecha_nro) || 0)) : 0;
+        const filas = [];
+        grupos.forEach(g => {
+          let fechas = todosContraTodos(g.eids);
+          if (vueltas === 2) fechas = fechas.concat(fechas.map(f => f.map(([a, b]) => [b, a])));
+          fechas.forEach((f, i) => f.forEach(([a, b]) => {
+            let dia = '';
+            if (inicio) { const d = new Date(inicio + 'T12:00:00'); d.setDate(d.getDate() + 7 * i); dia = d.toISOString().slice(0, 10); }
+            filas.push({ torneo_id: t.id, fecha_nro: base + i + 1, local_id: a, visitante_id: b, fecha_programada: dia, estado: 'Programado' });
+          }));
+        });
+        return filas;
+      };
+      const resumen = () => { const f = armar(); form.querySelector('#fx-resumen').textContent = `Se van a crear ${f.length} partidos en ${new Set(f.map(x => x.fecha_nro)).size} fechas.`; };
+      form.addEventListener('change', resumen); resumen();
+      form.addEventListener('submit', async ev => {
+        ev.preventDefault();
+        const filas = armar();
+        // La API acepta hasta 40 cambios por pedido: se mandan de a tandas.
+        for (let i = 0; i < filas.length; i += 40) {
+          const r = await guardar(filas.slice(i, i + 40).map(fila => ({ op: 'crear', tabla: 'Partidos', fila })), i + 40 >= filas.length ? `Fixture armado: ${filas.length} partidos.` : '');
+          if (!r) return;
+        }
+        cerrar(); vistaPanel();
+      });
     });
   }
 
@@ -829,12 +972,14 @@
       campos: () => [
         { k: 'liga_id', l: 'Liga organizadora', t: 'select', op: () => opLigas(false), req: 1, ayuda: 'Donde se guardan los partidos del torneo. Los equipos que juegan se eligen más abajo.' },
         { k: 'participantes', t: 'oculto' },
+        { k: 'zonas', t: 'oculto' },
         { k: 'nombre', l: 'Nombre del torneo', req: 1 },
         { k: 'temporada', l: 'Temporada', ancho: 'medio' },
         { k: 'categoria', l: 'Categoría', t: 'select', op: CATEGORIAS.map(c => [c, c]), ancho: 'medio' },
         { k: 'estado', l: 'Estado', ph: 'Ej.: Fase regular' },
-        { k: 'tipo', l: 'Tipo de torneo', t: 'select', op: [['', 'Tabla de posiciones'], ['llave', 'Llave de eliminación (playoffs)']], ancho: 'medio' },
-        { k: 'clasifica', l: 'Clasificados de otro torneo', ph: 'Ej.: T08:1-8', ancho: 'medio', ayuda: 'Para hexagonales y playoffs: T08:1-6 toma del 1° al 6° de la tabla del torneo T08, en ese orden. También podés poner clubes en orden de siembra: CL64, CL66. Si lo completás, no hace falta marcar equipos abajo.' },
+        { k: 'tipo', l: 'Tipo de torneo', t: 'select', op: [['', 'Tabla de posiciones'], ['grupos', 'Fase de grupos (zonas)'], ['llave', 'Llave de eliminación (playoffs)']], ancho: 'medio' },
+        { k: 'clasifica', l: 'Clasificados de otro torneo', ph: 'Ej.: T08:1-8', ancho: 'medio', ayuda: 'Para hexagonales y playoffs: T08:1-6 toma del 1° al 6° de la tabla del torneo T08, en ese orden. De una fase de grupos: T50:1-2 toma 1° y 2° de cada zona, y T50:Zona A:1-2 solo de esa zona. También podés poner clubes en orden de siembra: CL64, CL66. Si lo completás, no hace falta marcar equipos abajo.' },
+        { k: 'playoffs', l: 'Playoffs al terminar las zonas', t: 'select', op: [['', 'Sin playoffs'], ['1', 'Pasa el 1° de cada zona'], ['2', 'Pasan 1° y 2° de cada zona'], ['3', 'Pasan del 1° al 3° de cada zona'], ['4', 'Pasan del 1° al 4° de cada zona']], ancho: 'medio', ayuda: 'Los cruces se arman en el mismo torneo: 1° de una zona contra 2° de otra. Se cargan desde Fixture.' },
         { k: 'formato', l: 'Formato', t: 'area', filas: 3, ayuda: 'Se muestra debajo de la tabla de posiciones.' }
       ],
       puedeBorrar: t => !partidosDeTorneo(t)
@@ -851,13 +996,63 @@
         <summary><label><input type="checkbox" data-liga="${esc(l.id)}"> Toda la ${esc(l.nombre)}</label><span class="part-cuenta"></span></summary>
         <div class="part-clubes">${T('clubes').filter(c => c.liga_id === l.id).sort((a, b) => a.nombre.localeCompare(b.nombre)).map(c => `<label><input type="checkbox" data-club="${esc(c.id)}" data-de="${esc(l.id)}"> ${esc(c.nombre)}</label>`).join('') || '<small>Sin clubes cargados.</small>'}</div>
       </details>`).join('')}
+      <div class="part-zonas" hidden>
+        <div class="part-zonas__cabeza"><h3>Zonas</h3>
+          <label class="filtro"><span>Cantidad</span><select class="zonas-cant">${[2, 3, 4, 5, 6, 7, 8].map(n => `<option value="${n}">${n}</option>`).join('')}</select></label>
+          <button type="button" class="boton zonas-repartir">Repartir en orden</button></div>
+        <p class="ayuda">Elegí la zona de cada club. "Repartir en orden" los alterna A, B, C… en el orden de la lista.</p>
+        <div class="zonas-lista"></div>
+      </div>
       <p class="part-total" aria-live="polite"></p></fieldset>`;
   }
   function montarParticipantes(form, t) {
     const oculto = form.elements.participantes;
     const fs = form.querySelector('.participantes');
-    const tokens = String((t && t.participantes) || '').split(/[\s,;]+/).filter(Boolean).map(x => x.toUpperCase());
+    const tokens = sinZonas(t && t.participantes).split(/[\s,;]+/).filter(Boolean).map(x => x.toUpperCase());
     if (!tokens.length) tokens.push(String((t && t.liga_id) || form.elements.liga_id.value));
+    // Zonas (solo para "Fase de grupos")
+    const tipoSel = form.elements.tipo;
+    const bloqueZonas = fs.querySelector('.part-zonas');
+    const ini = zonasDeTexto(t && t.zonas);
+    const ocultoZonas = form.elements.zonas;
+    const letra = i => 'Zona ' + 'ABCDEFGH'[i];
+    let nombres = ini.nombres.length >= 2 ? ini.nombres.slice() : [letra(0), letra(1)];
+    const zonaDe = {};
+    Object.keys(ini.club).forEach(c => { zonaDe[c] = ini.club[c]; });
+    Object.keys(ini.liga).forEach(l => T('clubes').filter(c => c.liga_id === l).forEach(c => { zonaDe[c.id] = ini.liga[l]; }));
+    const cant = fs.querySelector('.zonas-cant');
+    cant.value = String(Math.min(8, Math.max(2, nombres.length)));
+    const elegidos = () => [...fs.querySelectorAll('input[data-club]')].filter(c => c.checked).map(c => c.dataset.club);
+    const nombreClub = id => (porId('clubes', id) || {}).nombre || id;
+    let errorZonas = '';
+    const dibujarZonas = () => {
+      const lista = elegidos();
+      // Los clubes sin zona van a la que tiene menos.
+      lista.forEach(id => {
+        if (nombres.includes(zonaDe[id])) return;
+        const cuenta = nombres.map(n => lista.filter(x => zonaDe[x] === n).length);
+        zonaDe[id] = nombres[cuenta.indexOf(Math.min(...cuenta))];
+      });
+      fs.querySelector('.zonas-lista').innerHTML = nombres.map(n => {
+        const de = lista.filter(id => zonaDe[id] === n);
+        return `<div class="zona-col"><b>${esc(n)} <small>${de.length}</small></b>${de.map(id => `<label class="zona-club"><span>${esc(nombreClub(id))}</span>
+          <select data-zona-de="${esc(id)}" aria-label="Zona de ${esc(nombreClub(id))}">${nombres.map(x => `<option ${x === n ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>`).join('') || '<small class="zona-vacia">Sin equipos</small>'}</div>`;
+      }).join('');
+    };
+    cant.addEventListener('change', () => {
+      const n = Number(cant.value);
+      nombres = Array.from({ length: n }, (_, i) => nombres[i] || letra(i));
+      actualizar();
+    });
+    fs.querySelector('.zonas-repartir').addEventListener('click', () => {
+      elegidos().forEach((id, i) => { zonaDe[id] = nombres[i % nombres.length]; });
+      actualizar();
+    });
+    fs.querySelector('.zonas-lista').addEventListener('change', e => {
+      e.stopPropagation();
+      if (e.target.dataset.zonaDe) { zonaDe[e.target.dataset.zonaDe] = e.target.value; actualizar(); }
+    });
+    if (tipoSel) tipoSel.addEventListener('change', () => actualizar());
     fs.querySelectorAll('input[data-liga]').forEach(i => { i.checked = tokens.includes(i.dataset.liga); });
     fs.querySelectorAll('input[data-club]').forEach(i => { i.checked = tokens.includes(i.dataset.club); });
     const actualizar = () => {
@@ -875,6 +1070,24 @@
       });
       oculto.value = valor.join(', ');
       fs.querySelector('.part-total').textContent = equipos ? `${equipos} clubes elegidos.` : 'Elegí al menos una liga o un club.';
+      const grupos = tipoSel && tipoSel.value === 'grupos';
+      bloqueZonas.hidden = !grupos;
+      // En una fase de grupos los playoffs van dentro del mismo torneo; "clasificados de otro torneo" no aplica.
+      const campo = n => form.elements[n] && form.elements[n].closest('.campo');
+      if (campo('playoffs')) campo('playoffs').hidden = !grupos;
+      if (campo('clasifica')) campo('clasifica').hidden = grupos;
+      if (grupos && form.elements.clasifica) form.elements.clasifica.value = '';
+      errorZonas = '';
+      ocultoZonas.value = '';
+      if (grupos) {
+        dibujarZonas();
+        const lista = elegidos();
+        ocultoZonas.value = nombres.map(n => { const de = lista.filter(id => zonaDe[id] === n); return de.length ? `${n}: ${de.join(', ')}` : ''; }).filter(Boolean).join('; ');
+        const cortas = nombres.filter(n => lista.filter(id => zonaDe[id] === n).length < 2);
+        if (lista.length && cortas.length) errorZonas = `Cada zona necesita al menos 2 equipos (${cortas.join(', ')}).`;
+        if (errorZonas) fs.querySelector('.part-total').textContent = errorZonas;
+        else if (lista.length) fs.querySelector('.part-total').textContent = `${lista.length} clubes en ${nombres.length} zonas.`;
+      }
     };
     fs.addEventListener('change', e => {
       // Marcar o desmarcar "toda la liga" marca o desmarca todos sus clubes.
@@ -882,7 +1095,9 @@
       actualizar();
     });
     fs.querySelectorAll('summary label').forEach(l => l.addEventListener('click', e => e.stopPropagation()));
-    form.addEventListener('submit', e => { if (!oculto.value) { e.preventDefault(); e.stopImmediatePropagation(); fs.querySelector('.part-total').textContent = 'Elegí al menos una liga o un club.'; } }, true);
+    form.addEventListener('submit', e => {
+      if (!oculto.value || errorZonas) { e.preventDefault(); e.stopImmediatePropagation(); fs.querySelector('.part-total').textContent = errorZonas || 'Elegí al menos una liga o un club.'; fs.scrollIntoView({ block: 'nearest' }); }
+    }, true);
     actualizar();
   }
 

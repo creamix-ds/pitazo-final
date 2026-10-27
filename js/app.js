@@ -195,7 +195,9 @@
     if (!t) return [];
     if (String(t.clasifica || '').trim()) return sembrados(t).map(x => x.eid).filter(Boolean);
     const deCategoria = e => !t.categoria || !e.categoria || e.categoria === t.categoria;
-    const tokens = String(t.participantes || '').split(/[\s,;]+/).filter(Boolean);
+    // En una fase de grupos la columna viene por zonas ("Zona A: CL02, CL04; Zona B: ..."):
+    // para saber quiénes juegan se ignoran los nombres de las zonas.
+    const tokens = String(t.participantes || '').replace(/(^|;)\s*[^:;,]*:/g, '$1 ').split(/[\s,;]+/).filter(Boolean);
     const lista = tokens.length ? tokens : [t.liga_id];
     const ids = new Set();
     lista.forEach(k => {
@@ -241,7 +243,17 @@
     return mejor || todos[todos.length - 1];
   };
   const ligaDeEquipo = eid => { const c = clubDeEquipo(eid); return c ? c.liga_id : null; };
-  const partidosDe = tid => D.partidos.filter(p => p.torneo_id === tid);
+  // En una fase de grupos, los partidos con "fase" (Semifinal, Final...) son los playoffs del
+  // mismo torneo: no cuentan para las tablas de las zonas. Se piden con el id "T50~PO".
+  const PO = '~PO';
+  const esDePlayoff = p => !!String(p.fase || '').trim();
+  const partidosDe = tid => {
+    tid = String(tid);
+    if (tid.endsWith(PO)) { const b = tid.slice(0, -PO.length); return D.partidos.filter(p => p.torneo_id === b && esDePlayoff(p)); }
+    const t = porId('torneos', tid);
+    const grupos = t && String(t.tipo || '').toLowerCase() === 'grupos';
+    return D.partidos.filter(p => p.torneo_id === tid && !(grupos && esDePlayoff(p)));
+  };
   const tieneMarcador = p => p.goles_local != null && p.goles_visitante != null;
 
   function resultado(p) {
@@ -258,12 +270,18 @@
   }
   const ordenJugado = p => (p.fecha_jugada || p.fecha_programada || '') + String(p.fecha_nro).padStart(3, '0');
 
-  function posiciones(tid) {
+  // Con "equipos", la tabla de una zona: solo esos equipos y los partidos entre ellos.
+  // En una fase de grupos sin "equipos", devuelve las tablas de todas las zonas, una
+  // detrás de otra, con la zona y el puesto dentro de ella en cada fila.
+  function posiciones(tid, equipos) {
     const t = {};
     const fila = id => t[id] || (t[id] = { id, PJ: 0, G: 0, E: 0, P: 0, GF: 0, GC: 0, PTS: 0, forma: [] });
     const tor = porId('torneos', tid);
-    if (tor && String(tor.participantes || '').trim()) participantesDe(tor).forEach(fila);
-    const lista = partidosDe(tid).slice().sort((a, b) => ordenJugado(a).localeCompare(ordenJugado(b)));
+    if (!equipos && esGrupos(tor)) return gruposDe(tor).flatMap(g => posiciones(tid, g.eids).map((r, i) => Object.assign(r, { grupo: g.nombre, puesto: i + 1 })));
+    const solo = equipos ? new Set(equipos) : null;
+    if (solo) equipos.forEach(fila);
+    else if (tor && String(tor.participantes || '').trim()) participantesDe(tor).forEach(fila);
+    const lista = partidosDe(tid).filter(p => !solo || (solo.has(p.local_id) && solo.has(p.visitante_id))).sort((a, b) => ordenJugado(a).localeCompare(ordenJugado(b)));
     lista.forEach(p => {
       const L = fila(p.local_id), V = fila(p.visitante_id);
       const r = resultado(p);
@@ -281,7 +299,7 @@
   }
 
   function goleadores(tid) {
-    const ids = new Set(partidosDe(tid).map(p => p.id));
+    const ids = new Set(partidosDe(tid).concat(String(tid).endsWith(PO) ? [] : partidosDe(tid + PO)).map(p => p.id));
     const g = {};
     D.eventos.filter(e => e.tipo === 'Gol' && ids.has(e.partido_id)).forEach(e => { g[e.jugador_id] = (g[e.jugador_id] || 0) + 1; });
     return Object.entries(g).map(([jid, goles]) => ({ j: porId('jugadores', jid), goles }))
@@ -307,8 +325,44 @@
   //   CL64, CL66, E12 → clubes o equipos puestos a mano, en ese orden
   // Mientras el torneo de origen no tenga partidos jugados, los lugares quedan como "1° Primera A".
   const esLlave = t => !!t && String(t.tipo || '').toLowerCase() === 'llave';
+  // ---------- fase de grupos ----------
+  // Tipo "grupos": la columna "zonas" de Torneos reparte los equipos, separadas por punto y coma:
+  //   Zona A: CL02, CL04, CL07; Zona B: CL01, CL05, CL06
+  // ("participantes" sigue teniendo la lista completa, sin zonas).
+  // Cada zona tiene su tabla con los partidos entre sus equipos.
+  const esGrupos = t => !!t && String(t.tipo || '').toLowerCase() === 'grupos';
+  function gruposDe(t) {
+    if (!t) return [];
+    const out = [];
+    String(t.zonas || t.participantes || '').split(';').map(x => x.trim()).filter(Boolean).forEach(seg => {
+      const m = seg.match(/^([^:]+):(.*)$/);
+      if (m) out.push({ nombre: m[1].trim(), eids: m[2].trim() ? participantesDe(Object.assign({}, t, { participantes: m[2], clasifica: '' })) : [] });
+    });
+    return out.length ? out : [{ nombre: 'Zona única', eids: participantesDe(t) }];
+  }
+  // Playoffs dentro de la fase de grupos. Columna "playoffs": cuántos pasan de cada zona (2 = 1° y 2°).
+  // Se arma un torneo "virtual" tipo llave que toma esos puestos de las zonas.
+  const clasificanPorZona = t => esGrupos(t) ? Number((String(t.playoffs || '').match(/\d+/) || [0])[0]) : 0;
+  function playoffsDe(t) {
+    if (!esGrupos(t)) return null;
+    const n = clasificanPorZona(t);
+    if (!n && !D.partidos.some(p => p.torneo_id === t.id && esDePlayoff(p))) return null;
+    return Object.assign({}, t, { id: t.id + PO, nombre: 'Playoffs', tipo: 'llave', clasifica: n ? `${t.id}:1-${n}` : '', participantes: '', zonas: '', playoffs: '', _padre: t.id });
+  }
+  const playoffsEnJuego = t => { const f = playoffsDe(t); return f && partidosDe(f.id).length ? f : null; };
+  const grupoDeEquipo = (t, eid) => gruposDe(t).find(g => g.eids.includes(eid)) || null;
+  const grupoDePartido = (t, p) => { const g = grupoDeEquipo(t, p.local_id); return g && g.eids.includes(p.visitante_id) ? g : null; };
+  // Puesto de un equipo: dentro de su zona en una fase de grupos.
+  function puestoDe(t, eid) {
+    const tabla = t ? posiciones(t.id) : [];
+    const i = tabla.findIndex(r => r.id === eid);
+    if (i < 0) return { pos: 0, fila: null };
+    return { pos: tabla[i].puesto || i + 1, fila: tabla[i] };
+  }
   const terminado = tid => { const ps = partidosDe(tid); return ps.length > 0 && ps.every(p => p.estado === 'Finalizado'); };
   const conJugados = tid => partidosDe(tid).some(p => p.estado === 'Finalizado');
+  // T08:1-8 · T50:Zona A:1-2 · T50:1-2
+  const RE_CLASIFICA = /^(T\d+)\s*:\s*(?:([^:]+?)\s*:\s*)?(\d+)(?:\s*-\s*(\d+))?$/;
   let sembrando = new Set();
   function sembrados(t) {
     const segs = String(t.clasifica || '').split(/[,;]+/).map(x => x.trim()).filter(Boolean);
@@ -318,11 +372,21 @@
     try {
       const deCategoria = e => !t.categoria || !e.categoria || e.categoria === t.categoria;
       segs.forEach(seg => {
-        const m = seg.toUpperCase().match(/^(T\d+)\s*:\s*(\d+)(?:\s*-\s*(\d+))?$/);
+        const m = seg.toUpperCase().match(RE_CLASIFICA);
         if (m) {
           const src = porId('torneos', m[1]);
-          const a = Number(m[2]), b = Number(m[3] || m[2]);
-          const tabla = src && conJugados(src.id) ? posiciones(src.id) : [];
+          const a = Number(m[3]), b = Number(m[4] || m[3]);
+          const jugado = src && conJugados(src.id);
+          // De una fase de grupos: "T50:Zona A:1-2" (una zona) o "T50:1-2" (esos puestos de cada zona: 1° A, 1° B, 2° A, 2° B...).
+          if (esGrupos(src)) {
+            const zonas = m[2] ? gruposDe(src).filter(g => g.nombre.toUpperCase() === m[2].trim()) : gruposDe(src);
+            for (let i = a; i <= b; i++) zonas.forEach(g => {
+              const fila = jugado ? posiciones(src.id, g.eids)[i - 1] : null;
+              out.push({ eid: fila ? fila.id : null, etiqueta: `${i}° ${g.nombre}`, provisorio: !!fila && !terminado(src.id) });
+            });
+            return;
+          }
+          const tabla = jugado ? posiciones(src.id) : [];
           for (let i = a; i <= b; i++) {
             const fila = tabla[i - 1];
             out.push({ eid: fila ? fila.id : null, etiqueta: `${i}° ${src ? src.nombre : m[1]}`, provisorio: !!fila && !terminado(src.id) });
@@ -439,10 +503,13 @@
   // Zonas de la tabla según las fases que toman equipos de ella (columna "clasifica").
   function zonasDe(t) {
     const refs = D.torneos.filter(x => x.id !== t.id && String(x.clasifica || '').toUpperCase().split(/[,;]+/).some(seg => seg.trim().startsWith(t.id.toUpperCase() + ':')));
+    const propios = playoffsDe(t);
+    if (propios && propios.clasifica) refs.push(propios);
     if (!refs.length) {
       const z = (CFG.ZONAS || {})[t.id];
       return z ? { clase: i => i < z.semis ? 'zona-semi' : i < z.cuartos ? 'zona-cuartos' : '', leyenda: [['ref-semi', 'Semifinales directas'], ['ref-cuartos', 'Cuartos de final']] } : null;
     }
+    // Clave "zona|puesto": en una fase de grupos cada zona se marca aparte.
     const mapa = {}, leyenda = [];
     refs.forEach(r => {
       let idx = 0;
@@ -450,17 +517,19 @@
       const P = 2 ** Math.ceil(Math.log2(Math.max(total, 2)));
       const byes = esLlave(r) ? P - total : 0;
       String(r.clasifica).toUpperCase().split(/[,;]+/).forEach(seg => {
-        const m = seg.trim().match(/^(T\d+)\s*:\s*(\d+)(?:\s*-\s*(\d+))?$/);
+        const m = seg.trim().match(RE_CLASIFICA);
         if (!m) { idx++; return; }
-        for (let i = Number(m[2]); i <= Number(m[3] || m[2]); i++, idx++) {
-          if (m[1] !== t.id.toUpperCase()) continue;
-          mapa[i - 1] = byes && idx < byes ? 'zona-semi' : byes ? 'zona-cuartos' : 'zona-semi';
-        }
+        const src = porId('torneos', m[1]);
+        const zonas = esGrupos(src) ? (m[2] ? gruposDe(src).filter(g => g.nombre.toUpperCase() === m[2].trim()) : gruposDe(src)) : [null];
+        for (let i = Number(m[3]); i <= Number(m[4] || m[3]); i++) zonas.forEach(g => {
+          if (m[1] === t.id.toUpperCase()) { const k = (g ? g.nombre : '') + '|' + (i - 1); mapa[k] = mapa[k] || (byes && idx < byes ? 'zona-semi' : byes ? 'zona-cuartos' : 'zona-semi'); }
+          idx++;
+        });
       });
       if (byes) leyenda.push(['ref-semi', `Pasan directo a ${nombreRonda(P / 2)}`], ['ref-cuartos', `Juegan ${nombreRonda(P)}`]);
-      else leyenda.push(['ref-semi', `Clasifican a ${r.nombre}`]);
+      else leyenda.push(['ref-semi', r._padre ? 'Clasifican a los playoffs' : `Clasifican a ${r.nombre}`]);
     });
-    return { clase: i => mapa[i] || '', leyenda };
+    return { clase: (i, grupo) => mapa[(grupo || '') + '|' + i] || '', leyenda };
   }
 
   function dibujarLlave(t) {
@@ -468,6 +537,7 @@
     if (!rondas.length) return '<p class="vacio">Todavía no hay cruces definidos.</p>';
     const fav = favorito();
     const provisorio = String(t.clasifica || '').trim() && sembrados(t).some(s => s.provisorio);
+    const fase = t._padre ? 'la fase de grupos' : 'la fase regular';
     const fila = (sd, goles, gana, pierde) => {
       const club = sd && sd.eid ? clubDeEquipo(sd.eid) : null;
       const nombre = esc(sd ? (sd.eid ? nombreEquipo(sd.eid) : sd.etiqueta) : 'A definir');
@@ -484,7 +554,7 @@
       });
       return `<small>${partes.join(' · ')}${c.pen ? ` · Penales ${esc(c.pen)}` : ''}</small>`;
     };
-    return `${provisorio ? '<p class="nota" style="margin:0 0 12px">Cruces provisorios según la tabla actual: se confirman cuando termine la fase regular.</p>' : ''}
+    return `${provisorio ? '<p class="nota" style="margin:0 0 12px">Cruces provisorios según la tabla actual: se confirman cuando termine ' + fase + '.</p>' : ''}
       <div class="llave" style="--rondas:${rondas.length}">${rondas.map(r => `
         <section class="llave__ronda"><h3>${esc(r.nombre)}</h3><div class="llave__cruces">${r.cruces.map(c => {
           const g = c.ganador;
@@ -597,7 +667,7 @@
         <th scope="col" title="Diferencia de gol">Dif</th><th scope="col" title="Puntos">Pts</th>
         ${compacta ? '' : '<th scope="col" class="ocultar-movil">Últimos 5</th>'}</tr></thead>
       <tbody>${filas.map((r, i) => {
-        const cls = [zonas ? zonas.clase(i) : '', fav.equipo === r.id ? 'es-favorito' : ''].join(' ').trim();
+        const cls = [zonas ? zonas.clase(i, opciones && opciones.grupo) : '', fav.equipo === r.id ? 'es-favorito' : ''].join(' ').trim();
         return `<tr class="${cls}"><td class="c-pos">${i + 1}</td>
           <td class="c-equipo"><a class="equipo-celda" href="${linkClub(r.id)}">${escudo(clubDeEquipo(r.id))}<span>${esc(nombreEquipo(r.id))}</span></a></td>
           ${compacta ? '' : `<td>${r.PJ}</td><td>${r.G}</td><td>${r.E}</td><td>${r.P}</td><td class="ocultar-movil">${r.GF}</td><td class="ocultar-movil">${r.GC}</td>`}
@@ -659,15 +729,17 @@
       <div class="contenedor pagina">
         <div class="grilla">
           <div>${D.ligas.map(l => {
-            const t = torneoActual(l.id);
+            const t0 = torneoActual(l.id);
+            // Con los playoffs en juego, la portada muestra los cruces en vez de las zonas.
+            const t = (t0 && !parcial(l.id) && playoffsEnJuego(t0)) || t0;
             const n = t && ultimaJugada(t.id);
             const ultimos = t ? partidosDe(t.id).filter(p => p.fecha_nro === n && p.estado === 'Finalizado') : [];
             return `<section class="panel liga-resumen">
               <div class="panel__cabeza"><div class="liga-resumen__titulo">${escudo({ nombre: l.nombre.replace(/^Liga (de Fútbol )?(de )?/, ''), escudo: l.logo }, 'm')}
-                <div><h2>${esc(l.nombre)}</h2><p>${esc(l.ciudad)}, ${esc(l.provincia)}${t ? `. ${esc(t.nombre)}` : ''}</p></div></div>
+                <div><h2>${esc(l.nombre)}</h2><p>${esc(l.ciudad)}, ${esc(l.provincia)}${t0 ? `. ${esc(t0.nombre)}${t !== t0 ? ', playoffs' : ''}` : ''}</p></div></div>
                 <a href="${urlLiga(l)}">Ver liga</a></div>
-              ${t && esLlave(t) ? llaveCompacta(t) : t ? tablaPosiciones(t, { compacta: true, limite: 4, filas: parcial(l.id) && resumenDe(l.id) && resumenDe(l.id).torneo === t.id ? resumenDe(l.id).tabla : null }) : '<p class="vacio">Sin torneo cargado.</p>'}
-              ${ultimos.length ? `<div class="panel__cabeza" style="border-top:1px solid var(--linea)"><h3>Fecha ${n}</h3><a href="${urlLiga(l, 'fechas/' + n)}">Todas las fechas</a></div>
+              ${t && esLlave(t) ? llaveCompacta(t) : t && esGrupos(t) && !parcial(l.id) ? gruposDe(t).map(g => `<p class="mini-zona">${esc(g.nombre)}</p>${tablaPosiciones(t, { compacta: true, limite: 2, filas: posiciones(t.id, g.eids), grupo: g.nombre })}`).join('') : t ? tablaPosiciones(t, { compacta: true, limite: 4, filas: parcial(l.id) && resumenDe(l.id) && resumenDe(l.id).torneo === t.id ? resumenDe(l.id).tabla : null }) : '<p class="vacio">Sin torneo cargado.</p>'}
+              ${ultimos.length ? `<div class="panel__cabeza" style="border-top:1px solid var(--linea)"><h3>Fecha ${n}</h3><a href="${urlLiga(l, t !== t0 ? 'playoffs' : 'fechas/' + n)}">${t !== t0 ? 'Ver cuadro' : 'Todas las fechas'}</a></div>
                 <ul class="partidos">${ultimos.map(p => filaPartido(p, { sinFuente: true })).join('')}</ul>` : ''}
             </section>`;
           }).join('')}</div>
@@ -707,13 +779,15 @@
     const liga = porId('ligas', lid);
     if (!liga) return vistaNoEncontrada('Esa liga no existe o ya no está adherida.');
     const t = torneoActual(lid);
-    seccion = SECCIONES.some(s => s[0] === seccion) ? seccion : 'posiciones';
+    const fp = t && playoffsDe(t);
+    seccion = SECCIONES.some(s => s[0] === seccion) || (fp && seccion === 'playoffs') ? seccion : 'posiciones';
     const fav = favorito();
     const esFav = fav.liga === lid;
     const hayVivo = t && partidosDe(t.id).some(p => p.estado === 'En juego');
     const visibles = torneosConPartidos(lid);
     if (t && !visibles.includes(t)) visibles.unshift(t);
     const SECC = SECCIONES.map(([k, n]) => [k, k === 'posiciones' && esLlave(t) ? 'Llave' : n]);
+    if (fp) SECC.splice(1, 0, ['playoffs', 'Playoffs']);
     $main.innerHTML = `
       <section class="banda"><div class="contenedor">
         <div class="banda__fila">
@@ -744,7 +818,7 @@
     }));
     const $s = document.getElementById('seccion');
     if (!t && seccion !== 'noticias' && seccion !== 'clubes') { $s.innerHTML = '<p class="vacio">Esta liga todavía no cargó su torneo.</p>'; return; }
-    ({ posiciones: secTabla, fechas: secFixture, goleadores: secGoleadores, noticias: secNoticias, clubes: secClubes }[seccion])($s, liga, t, extra);
+    ({ posiciones: secTabla, playoffs: secPlayoffs, fechas: secFixture, goleadores: secGoleadores, noticias: secNoticias, clubes: secClubes }[seccion])($s, liga, t, extra);
   }
 
   function secTabla($s, liga, t) {
@@ -766,14 +840,19 @@
     const sinMarcador = partidosDe(t.id).some(p => p.estado === 'Finalizado' && !tieneMarcador(p));
     $s.innerHTML = `<div class="grilla">
       <div>
-        <section class="panel">
+        ${esGrupos(t) ? gruposDe(t).map(g => `<section class="panel panel--zona">
+          <div class="panel__cabeza"><h2>${esc(g.nombre)}</h2><span class="zona-cuenta">${g.eids.length} equipos</span></div>
+          <div style="overflow-x:auto">${tablaPosiciones(t, { filas: posiciones(t.id, g.eids), grupo: g.nombre })}</div>
+        </section>`).join('') + (zonas ? `<div class="referencias referencias--suelta">${zonas.leyenda.map(([c, x]) => `<span class="${c}">${esc(x)}</span>`).join('')}</div>` : '')
+        : `<section class="panel">
           <div class="panel__cabeza"><h2>Tabla de posiciones</h2></div>
           <div style="overflow-x:auto">${tablaPosiciones(t)}</div>
           ${zonas ? `<div class="referencias">${zonas.leyenda.map(([c, x]) => `<span class="${c}">${esc(x)}</span>`).join('')}</div>` : ''}
-        </section>
+        </section>`}
         ${t.formato ? `<p class="nota" style="margin-left:0">${esc(t.formato)}${sinMarcador ? ' Los partidos sin marcador publicado suman puntos pero no goles.' : ''}</p>` : ''}
       </div>
       <aside>
+        ${playoffsEnJuego(t) ? `<section class="panel"><div class="panel__cabeza"><h2>Playoffs</h2><a href="${urlLiga(liga, 'playoffs')}">Ver cuadro</a></div>${llaveCompacta(playoffsDe(t))}</section>` : ''}
         ${proximos.length ? `<section class="panel"><div class="panel__cabeza"><h2>Fecha ${pend}</h2><a href="${urlLiga(liga, 'fechas/' + pend)}">Ver fecha</a></div>
           <ul class="partidos">${proximos.map(p => filaPartido(p, { compacto: true })).join('')}</ul></section>` : ''}
         <section class="panel"><div class="panel__cabeza"><h2>Goleadores</h2><a href="${urlLiga(liga, 'goleadores')}">Ver todos</a></div>
@@ -782,20 +861,42 @@
       </aside></div>`;
   }
 
+  // Cuadro de los playoffs de una fase de grupos.
+  function secPlayoffs($s, liga, t) {
+    const f = playoffsDe(t);
+    if (!f) { $s.innerHTML = '<p class="vacio">Este torneo no tiene playoffs.</p>'; return; }
+    const n = clasificanPorZona(t);
+    $s.innerHTML = `<section class="panel"><div class="panel__cabeza"><h2>Playoffs</h2>${n ? `<span class="zona-cuenta">${n === 1 ? 'Pasa el 1°' : `Pasan del 1° al ${n}°`} de cada zona</span>` : ''}</div>
+      <div class="llave-caja">${dibujarLlave(f)}</div></section>`;
+  }
+
   function secFixture($s, liga, t, extra) {
-    const fechas = fechasDe(t.id);
+    // En una fase de grupos con playoffs, el fixture muestra también las fechas de los cruces.
+    const todos = partidosDe(t.id).concat(esGrupos(t) ? partidosDe(t.id + PO) : []);
+    const fechas = [...new Set(todos.map(p => p.fecha_nro))].filter(x => x != null).sort((a, b) => a - b);
     if (!fechas.length) { $s.innerHTML = '<p class="vacio">Todavía no hay fixture cargado.</p>'; return; }
     let n = num(extra);
-    if (n == null || !fechas.includes(n)) { const pend = fechaPendiente(t.id); n = pend != null ? pend : fechas[fechas.length - 1]; }
-    const partidos = partidosDe(t.id).filter(p => p.fecha_nro === n);
-    const pendientes = new Set(fechas.filter(f => partidosDe(t.id).some(p => p.fecha_nro === f && p.estado !== 'Finalizado')));
+    if (n == null || !fechas.includes(n)) { const pend = fechas.find(f => todos.some(p => p.fecha_nro === f && p.estado !== 'Finalizado')); n = pend != null ? pend : fechas[fechas.length - 1]; }
+    const partidos = todos.filter(p => p.fecha_nro === n);
+    const pendientes = new Set(fechas.filter(f => todos.some(p => p.fecha_nro === f && p.estado !== 'Finalizado')));
     $s.innerHTML = `<section class="panel panel--fixture">
       <div class="panel__cabeza"><h2>Fecha ${n}</h2><span style="color:var(--tinta-2);font-size:.88rem">Programada para el ${fecha(partidos[0] && partidos[0].fecha_programada)}</span></div>
       <nav class="fechas" aria-label="Elegir fecha">${fechas.map(f => `<a href="${urlLiga(liga, 'fechas/' + f)}" class="${pendientes.has(f) ? 'pendiente' : ''}" ${f === n ? 'aria-current="page"' : ''} title="${pendientes.has(f) ? 'Fecha con partidos pendientes' : 'Fecha jugada'}">F${f}</a>`).join('')}</nav>
-      <ul class="partidos">${partidos.map(p => filaPartido(p)).join('')}</ul>
+      ${esGrupos(t) ? porZona(t, partidos).map(([nombre, ps]) => `<h3 class="fixture-zona">${esc(nombre)}</h3><ul class="partidos">${ps.map(p => filaPartido(p)).join('')}</ul>`).join('')
+        : `<ul class="partidos">${partidos.map(p => filaPartido(p)).join('')}</ul>`}
     </section>`;
     const actual = $s.querySelector('.fechas [aria-current]');
     if (actual) actual.scrollIntoView({ block: 'nearest', inline: 'center' });
+  }
+
+  // Partidos de una fecha separados por zona (los que cruzan zonas van al final).
+  function porZona(t, partidos) {
+    const deGrupos = partidos.filter(p => !esDePlayoff(p));
+    const out = gruposDe(t).map(g => [g.nombre, deGrupos.filter(p => (grupoDePartido(t, p) || {}).nombre === g.nombre)]).filter(x => x[1].length);
+    [...new Set(partidos.filter(esDePlayoff).map(p => p.fase.trim()))].forEach(f => out.push([f, partidos.filter(p => esDePlayoff(p) && p.fase.trim() === f)]));
+    const resto = deGrupos.filter(p => !grupoDePartido(t, p));
+    if (resto.length) out.push(['Otros partidos', resto]);
+    return out;
   }
 
   function secGoleadores($s, liga, t) {
@@ -833,7 +934,7 @@
       const eq = D.equipos.find(e => e.club_id === club.id);
       const i = eq ? tabla.findIndex(r => r.id === eq.id) : -1;
       return `<a class="club-ficha" href="#/club/${esc(club.id)}">${escudo(club, 'm')}
-        <span><h3>${esc(club.nombre)}</h3><p>${esc(club.ciudad)}${i >= 0 ? `. ${i + 1}° con ${tabla[i].PTS} puntos` : ''}</p></span></a>`;
+        <span><h3>${esc(club.nombre)}</h3><p>${esc(club.ciudad)}${i >= 0 ? `. ${tabla[i].puesto || i + 1}° ${tabla[i].grupo ? 'en ' + esc(tabla[i].grupo) + ' ' : ''}con ${tabla[i].PTS} puntos` : ''}</p></span></a>`;
     }).join('')}</div>`;
   }
 
@@ -886,7 +987,10 @@
   const SECCIONES_TORNEO = [['posiciones', 'Tabla'], ['fechas', 'Fixture'], ['goleadores', 'Goleadores'], ['equipos', 'Equipos']];
   function vistaTorneo(t, seccion, extra) {
     if (!t) return vistaNoEncontrada('Ese torneo no existe.');
-    seccion = SECCIONES_TORNEO.some(x => x[0] === seccion) ? seccion : 'posiciones';
+    const fp = playoffsDe(t);
+    const SECC_T = SECCIONES_TORNEO.slice();
+    if (fp) SECC_T.splice(1, 0, ['playoffs', 'Playoffs']);
+    seccion = SECC_T.some(x => x[0] === seccion) ? seccion : 'posiciones';
     const base = { _base: urlTorneo(t), id: '', nombre: t.nombre };
     const hayVivo = partidosDe(t.id).some(p => p.estado === 'En juego');
     $main.innerHTML = `
@@ -897,13 +1001,13 @@
             <div class="chips">${hayVivo ? '<span class="chip chip--vivo">Partidos en juego</span>' : ''}${t.estado ? `<span class="chip">${esc(t.estado)}</span>` : ''}<a class="chip" href="#/torneos" style="text-decoration:none">Torneos entre ligas</a></div>
           </div></div></div>
         <nav class="pestanas" aria-label="Secciones del torneo">
-          ${SECCIONES_TORNEO.map(([k, n]) => `<a href="${urlTorneo(t, k)}" ${k === seccion ? 'aria-current="page"' : ''}>${n}</a>`).join('')}
+          ${SECC_T.map(([k, n]) => `<a href="${urlTorneo(t, k)}" ${k === seccion ? 'aria-current="page"' : ''}>${n}</a>`).join('')}
         </nav>
       </div></section>
       <div class="contenedor pagina" id="seccion"></div>`;
     const $s = document.getElementById('seccion');
     if (seccion === 'equipos') return secEquiposTorneo($s, t);
-    ({ posiciones: secTabla, fechas: secFixture, goleadores: secGoleadores }[seccion])($s, base, t, extra);
+    ({ posiciones: secTabla, playoffs: secPlayoffs, fechas: secFixture, goleadores: secGoleadores }[seccion])($s, base, t, extra);
   }
 
   function secEquiposTorneo($s, t) {
@@ -953,7 +1057,7 @@
           ${principal ? `<div class="acciones"><button class="boton ${esFav ? '' : 'boton--primario'}" id="btn-equipo-fav" aria-pressed="${esFav}">${esFav ? 'Siguiendo' : 'Seguir a este equipo'}</button></div>` : ''}
         </div>
         ${fila ? `<div class="stats">
-          <div class="stat"><b>${pos + 1}°</b><small>Posición</small></div>
+          <div class="stat"><b>${fila.puesto || pos + 1}°</b><small>${fila.grupo ? 'Posición en ' + esc(fila.grupo) : 'Posición'}</small></div>
           <div class="stat"><b>${fila.PTS}</b><small>Puntos</small></div>
           <div class="stat"><b>${fila.G}-${fila.E}-${fila.P}</b><small>Ganados, empatados, perdidos</small></div>
           <div class="stat"><b>${fila.GF}:${fila.GC}</b><small>Goles a favor y en contra</small></div>
@@ -1148,6 +1252,25 @@
   // Para el panel: avisos y recarga de datos después de guardar cambios.
   window.LF = {
     aviso,
+    // Para el panel: la próxima ronda de playoffs de una fase de grupos con sus cruces ya definidos
+    // y todavía sin partidos cargados.
+    crucesPendientes: async tid => {
+      const t = porId('torneos', tid);
+      if (!t) return null;
+      // Siempre con los resultados al día (la copia del navegador puede estar vieja).
+      if (!COMPLETO) await cargarLigas([t.liga_id]);
+      const f = playoffsDe(porId('torneos', tid));
+      if (!f) return null;
+      const { rondas } = armarLlave(f);
+      for (const r of rondas) {
+        const libres = r.cruces.filter(c => !c.bye && (!c.ps || !c.ps.length));
+        const listos = libres.filter(c => c.A && c.B && c.A.eid && c.B.eid);
+        if (!libres.length) continue;
+        if (!listos.length) return { ronda: r.nombre, cruces: [], falta: true };
+        return { ronda: r.nombre, provisorio: sembrados(f).some(x => x.provisorio) && r === rondas[0], cruces: listos.map(c => ({ a: c.A.eid, b: c.B.eid, na: nombreEquipo(c.A.eid), nb: nombreEquipo(c.B.eid) })), faltan: libres.length - listos.length };
+      }
+      return { ronda: '', cruces: [], terminado: true };
+    },
     recargar: async () => {
       try { await cargarBase(); await cargarLigas(Object.keys(CARGA).filter(l => l !== '*')); actualizarNav(); dibujarCinta(); } catch (e) { console.warn(e); }
     },

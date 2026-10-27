@@ -572,3 +572,27 @@ body.con-cajon { overflow: hidden; }
 .llave__equipo.es-favorito { background: var(--celeste-suave); margin: 0 -10px; padding-left: 10px; padding-right: 10px; }
 .llave__pendiente { color: var(--tinta-3); font-style: italic; }
 .llave__cruce small { display: block; margin-top: 4px; color: var(--tinta-3); font-size: 0.75rem; }
+
+/* Fase de grupos */
+.panel--zona { margin-bottom: 18px; }
+.zona-cuenta { color: var(--tinta-3); font-size: 0.85rem; }
+.referencias--suelta { margin: -4px 0 18px; padding: 0 4px; border-top: none; }
+.mini-zona { margin: 10px 16px 2px; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--tinta-3); }
+.fixture-zona { margin: 0; padding: 10px 16px 6px; font-size: 0.82rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--tinta-3); border-top: 1px solid var(--linea); background: var(--fondo); }
+/* Panel: zonas de una fase de grupos */
+.part-zonas { border-top: 1px solid var(--linea); padding: 10px 0 4px; }
+.part-zonas[hidden] { display: none; }
+.part-zonas__cabeza { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; margin-bottom: 8px; }
+.part-zonas__cabeza h3 { margin: 0 auto 6px 0; font-size: 1rem; }
+.zonas-lista { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.zona-col { border: 1px solid var(--linea); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.zona-col > b small { color: var(--tinta-3); font-weight: 500; margin-left: 4px; }
+.zona-club { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 0.88rem; }
+.zona-club span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zona-club select { flex: none; width: auto; padding: 2px 4px; font-size: 0.82rem; }
+.zona-vacia { color: var(--tinta-3); }
+.campo[hidden] { display: none; }
+.lista-cruces { list-style: none; margin: 0 0 12px; padding: 0; border: 1px solid var(--linea); border-radius: 10px; }
+.lista-cruces li { padding: 8px 12px; font-weight: 600; }
+.lista-cruces li + li { border-top: 1px solid var(--linea); }
+.lista-cruces span { color: var(--tinta-3); font-weight: 500; margin: 0 6px; }
