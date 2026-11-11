@@ -19,6 +19,8 @@
     if (m) return `<div class="video"><iframe src="https://www.youtube-nocookie.com/embed/${m[1]}" title="Video" loading="lazy" allowfullscreen allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe></div>`;
     m = u.match(/vimeo\.com\/(?:video\/)?(\d+)/);
     if (m) return `<div class="video"><iframe src="https://player.vimeo.com/video/${m[1]}" title="Video" loading="lazy" allowfullscreen allow="fullscreen; picture-in-picture"></iframe></div>`;
+    m = u.match(/drive\.google\.com\/(?:file\/d\/|open\?(?:.*&)?id=|uc\?(?:.*&)?id=)([A-Za-z0-9_-]{10,})/);
+    if (m) return `<div class="video"><iframe src="https://drive.google.com/file/d/${m[1]}/preview" title="Video" loading="lazy" allow="autoplay" allowfullscreen></iframe></div>`;
     if (/\.(mp4|webm|ogg|ogv|mov)(\?|#|$)/i.test(u)) return `<div class="video"><video src="${esc(u)}" controls preload="metadata"></video></div>`;
     return '';
   }
