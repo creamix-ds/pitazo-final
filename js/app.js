@@ -24,6 +24,14 @@
     if (/\.(mp4|webm|ogg|ogv|mov)(\?|#|$)/i.test(u)) return `<div class="video"><video src="${esc(u)}" controls preload="metadata"></video></div>`;
     return '';
   }
+  // Link del campo "imagen" -> etiqueta <img> lista para mostrar (convierte links de Google Drive).
+  function imgNoticia(url) {
+    const u = urlSegura(url);
+    if (!u) return '';
+    const m = u.match(/(?:drive\.google\.com\/(?:file\/d\/|open\?(?:.*&)?id=|uc\?(?:.*&)?id=)|lh3\.googleusercontent\.com\/d\/)([A-Za-z0-9_-]{10,})/);
+    const src = m ? `https://lh3.googleusercontent.com/d/${m[1]}=w1200` : u;
+    return `<img class="noticia-img" src="${esc(src)}" alt="" loading="lazy">`;
+  }
   const num = v => (v === '' || v == null || isNaN(Number(v))) ? null : Number(v);
   const porId = (tabla, id) => D[tabla].find(x => x.id === id);
   const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
@@ -934,6 +942,7 @@
       <article class="noticia">
         <div class="meta"><time datetime="${esc(x.fecha)}">${fecha(x.fecha)}</time>${x.fuente ? `, ${esc(x.fuente)}` : ''}</div>
         <h3>${esc(x.titulo)}</h3>
+        ${x.imagen ? imgNoticia(x.imagen) : ''}
         <p>${esc(x.resumen)}</p>
         ${videoEmbed(x.url) || (urlSegura(x.url) ? `<a href="${esc(urlSegura(x.url))}" target="_blank" rel="noopener">Leer la nota completa</a>` : '')}
       </article>`).join('')}</div>`;
@@ -951,6 +960,7 @@
           <article class="noticia">
             <div class="meta"><time datetime="${esc(x.fecha)}">${fecha(x.fecha)}</time>${multiples && x.liga_id ? ` · <a href="${urlLiga(x.liga_id, 'noticias')}" style="color:inherit">${esc(nombreLiga(x.liga_id))}</a>` : ''}${x.fuente ? `, ${esc(x.fuente)}` : ''}</div>
             <h3>${esc(x.titulo)}</h3>
+            ${x.imagen ? imgNoticia(x.imagen) : ''}
             <p>${esc(x.resumen)}</p>
             ${videoEmbed(x.url) || (urlSegura(x.url) ? `<a href="${esc(urlSegura(x.url))}" target="_blank" rel="noopener">Leer la nota completa</a>` : '')}
           </article>`).join('')}</div>` : '<p class="vacio">Todavía no hay noticias publicadas.</p>'}
