@@ -442,7 +442,7 @@
           if (faltan.length) { $err.hidden = false; $err.textContent = 'Completá: ' + faltan.join(', ') + '.'; return; }
           const datos = leerFormulario(form, campos);
           let ops;
-          if (nuevo) ops = [{ op: 'crear', tabla: cfg.tabla, fila: datos }];
+          if (nuevo) ops = cfg.opsNuevo ? cfg.opsNuevo(datos, form) : [{ op: 'crear', tabla: cfg.tabla, fila: datos }];
           else {
             const cambios = cambiosEntre(item, datos);
             if (!Object.keys(cambios).length) { cerrar(); return; }
@@ -678,6 +678,18 @@
         const ps = T('partidos').filter(p => p.torneo_id === tid);
         return { torneo_id: tid, fecha_nro: ps.length ? Math.max(...ps.map(p => num(p.fecha_nro) || 0)) : 1, estado: 'Programado' };
       },
+      // "Ida y vuelta" (fase final): crea los dos partidos de una, la vuelta con los equipos invertidos y una fecha después.
+      opsNuevo: datos => {
+        const doble = String(datos._formato) === '2';
+        delete datos._formato;
+        if (doble && datos.local_id && datos.visitante_id) {
+          const f1 = num(datos.fecha_nro) || 1;
+          const ida = Object.assign({}, datos, { fecha_nro: f1 });
+          const vuelta = Object.assign({}, datos, { fecha_nro: f1 + 1, local_id: datos.visitante_id, visitante_id: datos.local_id, fecha_programada: '', penales: '', estado: 'Programado' });
+          return [{ op: 'crear', tabla: 'Partidos', fila: ida }, { op: 'crear', tabla: 'Partidos', fila: vuelta }];
+        }
+        return [{ op: 'crear', tabla: 'Partidos', fila: datos }];
+      },
       campos: f => {
         const t = porId('torneos', f.torneo_id || tid);
         const ids = new Set(participantesDe(t));
@@ -688,6 +700,7 @@
           ...(t && (esLlave(t) || esGrupos(t)) ? [
             { k: 'fase', l: 'Fase', ph: 'Ej.: Cuartos de final', ancho: 'medio', ayuda: esGrupos(t) ? 'Vacío = partido de la fase de grupos. Para los playoffs: Cuartos de final, Semifinal, Final.' : '' },
             { k: 'llave', l: 'Número de llave', t: 'num', ancho: 'medio', ayuda: 'Ida y vuelta llevan el mismo número.' },
+            ...(!f.id ? [{ k: '_formato', l: 'Formato', t: 'select', op: [['1', 'Partido único'], ['2', 'Ida y vuelta']], ancho: 'medio', ayuda: 'Ida y vuelta crea los dos partidos; en la vuelta juega de local el visitante, una fecha después.' }] : []),
             { k: 'penales', l: 'Penales (local-visitante)', ph: 'Ej.: 4-3', ancho: 'medio' }] : []),
           { k: 'estado', l: 'Estado', t: 'select', op: ESTADOS.map(e => [e, e]), ancho: 'medio' },
           { k: 'local_id', l: 'Local', t: 'select', op: [['', 'Elegí un equipo']].concat(opEquipos(equipos)), req: 1, ancho: 'medio' },
