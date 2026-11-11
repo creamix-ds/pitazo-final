@@ -12,6 +12,16 @@
   // ---------- utilidades ----------
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const urlSegura = u => /^https?:\/\//i.test(String(u || '').trim()) ? String(u).trim() : '';
+  function videoEmbed(url) {
+    const u = urlSegura(url);
+    if (!u) return '';
+    let m = u.match(/(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+    if (m) return `<div class="video"><iframe src="https://www.youtube-nocookie.com/embed/${m[1]}" title="Video" loading="lazy" allowfullscreen allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe></div>`;
+    m = u.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+    if (m) return `<div class="video"><iframe src="https://player.vimeo.com/video/${m[1]}" title="Video" loading="lazy" allowfullscreen allow="fullscreen; picture-in-picture"></iframe></div>`;
+    if (/\.(mp4|webm|ogg|ogv|mov)(\?|#|$)/i.test(u)) return `<div class="video"><video src="${esc(u)}" controls preload="metadata"></video></div>`;
+    return '';
+  }
   const num = v => (v === '' || v == null || isNaN(Number(v))) ? null : Number(v);
   const porId = (tabla, id) => D[tabla].find(x => x.id === id);
   const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
@@ -923,7 +933,7 @@
         <div class="meta"><time datetime="${esc(x.fecha)}">${fecha(x.fecha)}</time>${x.fuente ? `, ${esc(x.fuente)}` : ''}</div>
         <h3>${esc(x.titulo)}</h3>
         <p>${esc(x.resumen)}</p>
-        ${urlSegura(x.url) ? `<a href="${esc(urlSegura(x.url))}" target="_blank" rel="noopener">Leer la nota completa</a>` : ''}
+        ${videoEmbed(x.url) || (urlSegura(x.url) ? `<a href="${esc(urlSegura(x.url))}" target="_blank" rel="noopener">Leer la nota completa</a>` : '')}
       </article>`).join('')}</div>`;
   }
 
