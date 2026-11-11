@@ -939,6 +939,24 @@
       </article>`).join('')}</div>`;
   }
 
+  function vistaNoticias() {
+    const n = D.noticias.slice().sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+    const nombreLiga = id => { const l = porId('ligas', id); return l ? l.nombre : ''; };
+    const multiples = new Set(n.map(x => x.liga_id)).size > 1;
+    $main.innerHTML = `
+      <section class="banda"><div class="contenedor"><div class="banda__fila"><div>
+        <h1>Noticias</h1><p>${n.length ? `${n.length} ${n.length === 1 ? 'nota publicada' : 'notas publicadas'}, de la más reciente a la más antigua.` : 'Todavía no hay noticias publicadas.'}</p></div></div></div></section>
+      <div class="contenedor pagina">
+        ${n.length ? `<div class="noticias">${n.map(x => `
+          <article class="noticia">
+            <div class="meta"><time datetime="${esc(x.fecha)}">${fecha(x.fecha)}</time>${multiples && x.liga_id ? ` · <a href="${urlLiga(x.liga_id, 'noticias')}" style="color:inherit">${esc(nombreLiga(x.liga_id))}</a>` : ''}${x.fuente ? `, ${esc(x.fuente)}` : ''}</div>
+            <h3>${esc(x.titulo)}</h3>
+            <p>${esc(x.resumen)}</p>
+            ${videoEmbed(x.url) || (urlSegura(x.url) ? `<a href="${esc(urlSegura(x.url))}" target="_blank" rel="noopener">Leer la nota completa</a>` : '')}
+          </article>`).join('')}</div>` : '<p class="vacio">Todavía no hay noticias publicadas.</p>'}
+      </div>`;
+  }
+
   function secClubes($s, liga, t) {
     const tabla = t ? posiciones(t.id) : [];
     const c = D.clubes.filter(x => x.liga_id === liga.id).sort((a, b) => a.nombre.localeCompare(b.nombre));
@@ -1251,6 +1269,7 @@
       vistaTorneo(t, partes[2], partes[3]);
     }
     else if (partes[0] === 'admin') { window.Admin.mostrar($main, partes.slice(1)); document.title = 'Panel de clubes | Pitazo Final'; window.scrollTo(0, 0); return; }
+    else if (partes[0] === 'noticias') { vistaNoticias(); const a = document.querySelector('[data-nav="noticias"]'); if (a) a.setAttribute('aria-current', 'page'); }
     else if (partes[0] === 'ligas') { vistaLigas(); document.querySelector('[data-nav="ligas"]').setAttribute('aria-current', 'page'); }
     else if (partes[0] === 'mi-equipo') { vistaMiEquipo(); document.querySelector('[data-nav="mi-equipo"]').setAttribute('aria-current', 'page'); }
     else vistaInicio();
