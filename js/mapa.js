@@ -55,9 +55,13 @@
       pathPorIso[p.iso] = path;
     });
 
-    // Pines de ligas
-    ligas.filter(l => l.lat != null && l.lng != null).forEach(l => {
-      const [x, y] = proyectar(l.lng, l.lat);
+    // Pines de ligas. Convertimos a número y descartamos coordenadas vacías, inválidas
+    // o fuera de rango, así un dato roto nunca manda el pin fuera del mapa.
+    const coord = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
+    ligas.map(l => ({ l, lat: coord(l.lat), lng: coord(l.lng) }))
+      .filter(o => o.lat != null && o.lng != null && Math.abs(o.lat) <= 90 && Math.abs(o.lng) <= 180)
+      .forEach(({ l, lat, lng }) => {
+      const [x, y] = proyectar(lng, lat);
       const g = el('g', { class: 'pin-ar' + (favorita === l.id ? ' pin-ar--favorita' : ''), transform: `translate(${x.toFixed(1)},${y.toFixed(1)})`, tabindex: '0', role: 'button', 'aria-label': `${l.nombre}, ${l.ciudad}. Ver detalle` });
       g.append(el('circle', { r: 18, class: 'pin-ar__halo' }), el('circle', { r: 8, class: 'pin-ar__punto' }));
       const abrir = ev => { ev.stopPropagation(); abrirFicha(l, x, y); };
