@@ -353,10 +353,27 @@
       else if (c.t === 'area') control = `<textarea ${comun} rows="${c.filas || 4}">${esc(v)}</textarea>`;
       else {
         const tipo = { num: 'number', fecha: 'date', hora: 'time', url: 'url', email: 'email' }[c.t] || 'text';
-        control = `<input type="${tipo}" ${comun} value="${esc(v)}" ${c.t === 'num' ? `step="${c.paso || 1}" inputmode="decimal"` : ''} ${c.ph ? `placeholder="${esc(c.ph)}"` : ''}>`;
+        control = `<input type="${tipo}" ${comun} value="${esc(v)}" ${c.t === 'num' ? `step="${c.paso || 1}" inputmode="decimal"` : ''} ${c.t === 'coord' ? 'inputmode="decimal"' : ''} ${c.ph ? `placeholder="${esc(c.ph)}"` : ''}>`;
       }
       return `<div class="campo${c.ancho === 'medio' ? ' campo--medio' : ''}"><label for="${id}">${esc(c.l)}${c.req ? ' <span aria-hidden="true">*</span>' : ''}</label>${control}${c.ayuda ? `<small>${esc(c.ayuda)}</small>` : ''}</div>`;
     }).join('')}</div>`;
+  }
+  // Limpia una coordenada escrita a mano: coma->punto, saca basura y reinserta el
+  // punto decimal si se perdió (número gigante o notación científica). Argentina usa
+  // 2 dígitos enteros, así que un valor > 180 es siempre un punto decimal perdido.
+  function normCoord(raw) {
+    let s = String(raw == null ? '' : raw).trim();
+    if (!s) return '';
+    if (/e/i.test(s)) { const n = Number(s.replace(',', '.')); if (isFinite(n)) s = n.toFixed(0); }
+    s = s.replace(',', '.').replace(/[^0-9.\-]/g, '');
+    const neg = s.indexOf('-') >= 0;
+    s = s.replace(/-/g, '');
+    const p = s.split('.'); s = p.shift() + (p.length ? '.' + p.join('') : '');
+    if (s === '' || s === '.') return '';
+    let n = Number(s);
+    if (!isFinite(n)) return '';
+    if (n > 180) { const d = s.replace('.', ''); n = Number(d.slice(0, 2) + '.' + d.slice(2)); }
+    return isFinite(n) ? (neg ? -n : n) : '';
   }
   function leerFormulario(form, campos) {
     const o = {};
@@ -365,6 +382,7 @@
       const el = form.elements[c.k]; if (!el) return;
       let v = el.value.trim();
       if (c.t === 'num') v = v === '' ? '' : Number(v);
+      else if (c.t === 'coord') v = normCoord(v);
       o[c.k] = v;
     });
     return o;
@@ -1124,8 +1142,8 @@
         { k: 'nombre', l: 'Nombre de la liga', req: 1 },
         { k: 'provincia', l: 'Provincia', t: 'select', op: PROVINCIAS.map(p => [p, p]), req: 1, ancho: 'medio' },
         { k: 'ciudad', l: 'Ciudad', ancho: 'medio' },
-        { k: 'lat', l: 'Latitud', t: 'num', paso: 'any', ancho: 'medio', ayuda: 'Ej.: -36.2306' },
-        { k: 'lng', l: 'Longitud', t: 'num', paso: 'any', ancho: 'medio', ayuda: 'Ej.: -61.1131' },
+        { k: 'lat', l: 'Latitud', t: 'coord', ancho: 'medio', ayuda: 'Ej.: -36.2306 (se corrige sola si usás coma)' },
+        { k: 'lng', l: 'Longitud', t: 'coord', ancho: 'medio', ayuda: 'Ej.: -61.1131 (se corrige sola si usás coma)' },
         { k: 'logo', l: 'Logo (link a la imagen)', t: 'url' },
         { k: 'web', l: 'Sitio web', t: 'url' },
         { k: 'contacto', l: 'Contacto' },
