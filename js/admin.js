@@ -344,7 +344,7 @@
   // campo: { k, l, t: texto|num|fecha|hora|url|email|area|select, op: [[valor, etiqueta]], req, ayuda, ancho: 'medio' }
   function formulario(campos, fila) {
     return `<div class="grilla-form">${campos.map(c => {
-      const v = fila[c.k] == null ? '' : fila[c.k];
+      const v = c.valor ? c.valor(fila) : (fila[c.k] == null ? '' : fila[c.k]);
       const id = 'f-' + c.k;
       const comun = `id="${id}" name="${c.k}" ${c.req ? 'required' : ''} ${c.solo === 'lectura' ? 'disabled' : ''}`;
       if (c.t === 'oculto') return `<input type="hidden" id="${id}" name="${c.k}" value="${esc(v)}">`;
@@ -374,6 +374,19 @@
     if (!isFinite(n)) return '';
     if (n > 180) { const d = s.replace('.', ''); n = Number(d.slice(0, 2) + '.' + d.slice(2)); }
     return isFinite(n) ? (neg ? -n : n) : '';
+  }
+  // Separa un texto "latitud, longitud" (como lo copia Google Maps) en dos coordenadas
+  // ya normalizadas. Acepta coma, espacio o punto y coma como separador.
+  function partirCoords(raw) {
+    const s = String(raw == null ? '' : raw).trim();
+    if (!s) return ['', ''];
+    const porComa = s.split(',');
+    let p;
+    if (porComa.length === 2) p = porComa;
+    else if (/\s/.test(s)) p = s.split(/\s+/);
+    else if (s.indexOf(';') >= 0) p = s.split(';');
+    else p = porComa;
+    return [normCoord(p[0] || ''), normCoord(p[1] || '')];
   }
   function leerFormulario(form, campos) {
     const o = {};
@@ -459,6 +472,7 @@
           const faltan = campos.filter(c => c.req && !String(form.elements[c.k].value).trim()).map(c => c.l);
           if (faltan.length) { $err.hidden = false; $err.textContent = 'Completá: ' + faltan.join(', ') + '.'; return; }
           const datos = leerFormulario(form, campos);
+          if (cfg.normalizar) cfg.normalizar(datos);
           let ops;
           if (nuevo) ops = cfg.opsNuevo ? cfg.opsNuevo(datos, form) : [{ op: 'crear', tabla: cfg.tabla, fila: datos }];
           else {
@@ -1142,14 +1156,14 @@
         { k: 'nombre', l: 'Nombre de la liga', req: 1 },
         { k: 'provincia', l: 'Provincia', t: 'select', op: PROVINCIAS.map(p => [p, p]), req: 1, ancho: 'medio' },
         { k: 'ciudad', l: 'Ciudad', ancho: 'medio' },
-        { k: 'lat', l: 'Latitud', t: 'coord', ancho: 'medio', ayuda: 'Ej.: -36.2306 (se corrige sola si usás coma)' },
-        { k: 'lng', l: 'Longitud', t: 'coord', ancho: 'medio', ayuda: 'Ej.: -61.1131 (se corrige sola si usás coma)' },
+        { k: '_coords', l: 'Coordenadas', ayuda: 'Latitud y longitud juntas, ej.: -36.2306, -61.1131. Se corrige sola si usás coma decimal.', valor: f => [f.lat, f.lng].filter(x => x !== '' && x != null).join(', ') },
         { k: 'logo', l: 'Logo (link a la imagen)', t: 'url' },
         { k: 'web', l: 'Sitio web', t: 'url' },
         { k: 'contacto', l: 'Contacto' },
         { k: 'activa', l: 'Visible en el sitio', t: 'select', op: SI_NO }
       ],
-      extraForm: () => '<p class="nota" style="margin:0 0 12px">Para la latitud y longitud: en Google Maps, clic derecho sobre la ciudad y copiá los números que aparecen arriba.</p>',
+      extraForm: () => '<p class="nota" style="margin:0 0 12px">Coordenadas: en Google Maps, clic derecho sobre la ciudad y hacé clic en los números de arriba (se copian como "latitud, longitud"); pegalos en el campo Coordenadas.</p>',
+      normalizar: d => { const c = partirCoords(d._coords); d.lat = c[0]; d.lng = c[1]; delete d._coords; },
       puedeBorrar: l => !T('clubes').some(c => c.liga_id === l.id) && !T('torneos').some(t => t.liga_id === l.id)
     });
   }
