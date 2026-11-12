@@ -59,7 +59,7 @@
     const u = new URL(CFG.API_URL);
     u.searchParams.set('r', r);
     Object.entries(extra || {}).forEach(([k, v]) => u.searchParams.set(k, v));
-    const res = await fetch(u.toString());
+    const res = await fetch(u.toString(), { cache: 'no-cache' });
     const j = await res.json();
     if (!j.ok) throw new Error(j.error || 'Error de la API');
     return j.data;
@@ -71,7 +71,7 @@
   //  - CARGA[liga] (?r=liga&id=L01): jugadores, partidos, eventos y noticias de esa liga. Se
   //    pide recién cuando se abre la liga, un club o un torneo que la necesita.
   // D junta todo lo que está cargado, así el resto del sitio trabaja como si tuviera todo.
-  const COPIA_BASE = 'lf_base_v2', COPIA_LIGA = 'lf_liga_v2_', COPIA_INDICE = 'lf_ligas_v2';
+  const COPIA_BASE = 'lf_base_v3', COPIA_LIGA = 'lf_liga_v3_', COPIA_INDICE = 'lf_ligas_v3';
   let BASE = null;
   const CARGA = {};
   const FRESCAS = new Set();   // ligas pedidas a la API en esta visita
