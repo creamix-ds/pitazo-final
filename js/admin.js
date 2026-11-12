@@ -437,7 +437,7 @@
   function editorTabla($c, cfg) {
     const items = cfg.items();
     $c.innerHTML = `<section class="panel">
-      <div class="panel__cabeza"><h2>${esc(cfg.titulo)}</h2>${cfg.puedeCrear === false ? '' : `<button class="boton boton--primario" type="button" id="btn-nuevo">${esc(cfg.nuevoTexto || 'Agregar')}</button>`}</div>
+      <div class="panel__cabeza"><h2>${esc(cfg.titulo)}</h2><div style="display:flex;gap:8px;flex-wrap:wrap">${cfg.masivo ? `<button class="boton" type="button" id="btn-masivo">Pegar lista</button>` : ''}${cfg.puedeCrear === false ? '' : `<button class="boton boton--primario" type="button" id="btn-nuevo">${esc(cfg.nuevoTexto || 'Agregar')}</button>`}</div></div>
       ${cfg.filtros || ''}
       ${items.length ? `<ul class="lista-admin">${items.map(it => { const r = cfg.resumen(it); return `<li><button type="button" class="fila-admin" data-id="${esc(it[cfg.clave || 'id'])}">
         ${r.icono || ''}<span class="fila-admin__texto"><b>${esc(r.t)}</b>${r.s ? `<small>${r.s}</small>` : ''}</span>${r.der ? `<span class="fila-admin__der">${r.der}</span>` : ''}</button></li>`; }).join('')}</ul>`
@@ -446,7 +446,52 @@
     if (cfg.alMontar) cfg.alMontar($c);
     const nuevo = $c.querySelector('#btn-nuevo');
     if (nuevo) nuevo.addEventListener('click', () => abrirFormTabla(cfg, null));
+    const bm = $c.querySelector('#btn-masivo');
+    if (bm) bm.addEventListener('click', () => cargaMasiva(cfg));
     $c.querySelectorAll('.fila-admin').forEach(b => b.addEventListener('click', () => abrirFormTabla(cfg, items.find(x => String(x[cfg.clave || 'id']) === b.dataset.id))));
+  }
+
+  // Carga masiva: pegar una lista (una línea por registro) y crear todo en tandas.
+  // Se activa por tabla con cfg.masivo = { columnas, requerido, unidad, ayuda, placeholder, contextoHTML, fijos, tanda }.
+  function cargaMasiva(cfg) {
+    const m = cfg.masivo, cols = m.columnas, tanda = m.tanda || 40;
+    const unidad = m.unidad || 'registro', plural = m.unidadPlural || unidad + 's';
+    const parsear = txt => txt.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(linea => {
+      const partes = (linea.indexOf('\t') >= 0 ? linea.split('\t') : linea.split(',')).map(x => x.trim());
+      const fila = {};
+      cols.forEach((k, i) => { if (partes[i] != null && partes[i] !== '') fila[k] = partes[i]; });
+      return fila;
+    });
+    const valido = f => (m.requerido || []).every(k => f[k] != null && f[k] !== '');
+    abrirCajon('Pegar lista', `<form id="form-masivo" novalidate>
+      ${m.contextoHTML ? m.contextoHTML() : ''}
+      <div class="campo"><label for="masivo-txt">Pegá la lista — una línea por ${esc(unidad)}</label>
+        <textarea id="masivo-txt" rows="9" placeholder="${esc(m.placeholder || '')}"></textarea>
+        ${m.ayuda ? `<small>${m.ayuda}</small>` : ''}</div>
+      <p class="nota" id="masivo-resumen" style="margin:4px 0 0"></p>
+      <p class="error-form" id="masivo-error" role="alert" hidden></p>
+      <div class="acciones acciones--form"><button class="boton boton--primario" type="submit" data-guardar>Crear</button></div>
+    </form>`, (cuerpo, cerrar) => {
+      const form = cuerpo.querySelector('#form-masivo');
+      const $txt = form.querySelector('#masivo-txt'), $res = form.querySelector('#masivo-resumen');
+      const validas = () => parsear($txt.value).filter(valido);
+      const resumen = () => { const n = validas().length; $res.textContent = n ? `Se van a crear ${n} ${n === 1 ? unidad : plural}.` : 'Pegá al menos una línea.'; };
+      $txt.addEventListener('input', resumen); resumen();
+      form.addEventListener('submit', async ev => {
+        ev.preventDefault();
+        const $err = form.querySelector('#masivo-error'); $err.hidden = true;
+        let fijos;
+        try { fijos = m.fijos ? m.fijos(form) : {}; } catch (e) { $err.hidden = false; $err.textContent = e.message; return; }
+        const filas = validas().map(f => Object.assign({}, fijos, f));
+        if (!filas.length) { $err.hidden = false; $err.textContent = 'No hay líneas válidas para crear.'; return; }
+        for (let i = 0; i < filas.length; i += tanda) {
+          const chunk = filas.slice(i, i + tanda);
+          const r = await guardar(chunk.map(fila => ({ op: 'crear', tabla: cfg.tabla, fila })), i + tanda >= filas.length ? `Se crearon ${filas.length} ${filas.length === 1 ? unidad : plural}.` : '');
+          if (!r) return;
+        }
+        cerrar(); vistaPanel();
+      });
+    });
   }
 
   function abrirFormTabla(cfg, item) {
@@ -901,6 +946,14 @@
         };
       },
       porDefecto: () => ({ equipo_id: (equipos[0] || {}).id, activo: 'SI' }),
+      masivo: {
+        unidad: 'jugador', unidadPlural: 'jugadores', requerido: ['apellido'],
+        columnas: ['apellido', 'nombre', 'numero', 'posicion'],
+        placeholder: 'Pérez, Juan, 9, Delantero\nGómez, Luis, 5, Mediocampista\nLópez, Mario',
+        ayuda: 'Una línea por jugador, con los datos separados por coma o tabulación (podés pegar desde Excel). Orden: <b>Apellido, Nombre, N°, Posición</b>. Solo el apellido es obligatorio.',
+        contextoHTML: () => equipos.length > 1 ? `<div class="campo"><label for="masivo-eq">Equipo / categoría</label><select id="masivo-eq">${equipos.map(e => `<option value="${esc(e.id)}">${esc(e.categoria)}</option>`).join('')}</select></div>` : '',
+        fijos: form => { const eq = equipos.length > 1 ? form.querySelector('#masivo-eq').value : (equipos[0] || {}).id; if (!eq) throw new Error('Este club todavía no tiene una categoría. Agregá una antes de cargar el plantel.'); return { equipo_id: eq, activo: 'SI' }; }
+      },
       campos: camposJug,
       puedeBorrar: j => esDev() && !T('eventos').some(e => e.jugador_id === j.id),
       vacio: 'Todavía no hay jugadores cargados. Agregá el plantel con el botón de arriba.'
@@ -970,6 +1023,14 @@
       items: () => T('clubes').filter(c => !filtro.liga || c.liga_id === filtro.liga).sort((a, b) => a.nombre.localeCompare(b.nombre)),
       resumen: c => ({ t: c.nombre, s: [c.ciudad, (porId('ligas', c.liga_id) || {}).nombre].filter(Boolean).map(esc).join(', '), der: `${T('equipos').filter(e => e.club_id === c.id).length} cat.` }),
       porDefecto: () => ({ liga_id: filtro.liga || (ligas[0] || {}).id }),
+      masivo: esDev() ? {
+        unidad: 'club', unidadPlural: 'clubes', requerido: ['nombre'], tanda: 20,
+        columnas: ['nombre', 'ciudad'],
+        placeholder: 'Atlético Urdampilleta, Urdampilleta\nBalonpié, Bolívar\nBancario',
+        ayuda: 'Una línea por club: <b>Nombre, Ciudad</b> (la ciudad es opcional). Cada club se crea con su equipo de Primera.',
+        contextoHTML: () => `<div class="campo"><label for="masivo-liga">Liga</label><select id="masivo-liga">${opLigas(false).map(o => `<option value="${esc(o[0])}" ${o[0] === (filtro.liga || '') ? 'selected' : ''}>${esc(o[1])}</option>`).join('')}</select></div>`,
+        fijos: form => { const liga = form.querySelector('#masivo-liga').value; if (!liga) throw new Error('Elegí una liga.'); return { liga_id: liga }; }
+      } : null,
       campos: () => camposClub(true),
       extraForm: c => c ? categoriasHTML(c) : '<p class="nota" style="margin:0 0 12px">Al guardar se crea su equipo de Primera.</p>',
       alMontarForm: (form, c) => { if (c) montarCategorias(form, c); },
