@@ -162,7 +162,7 @@
     }
     function mostrarFichaProvincia(p, lista) {
       ficha.innerHTML = `<button type="button" class="mapa-ar__cerrar" aria-label="Cerrar">×</button><h3>${esc(p.nombre)}</h3>
-        ${lista.length ? `<ul>${lista.map(l => `<li><a href="#/liga/${encodeURIComponent(l.slug || l.id)}">${esc(l.nombre)}</a></li>`).join('')}</ul>`
+        ${lista.length ? `<p>${lista.length} ${lista.length === 1 ? 'liga adherida' : 'ligas adheridas'}</p><ul>${lista.map(l => `<li><a href="#/liga/${encodeURIComponent(l.slug || l.id)}">${esc(l.nombre)}</a></li>`).join('')}</ul>`
           : '<p>Todavía no hay ligas adheridas en esta provincia.</p>'}`;
       tip.hidden = true; ficha.hidden = false; ficha._xy = p.c;
       ficha.querySelector('.mapa-ar__cerrar').addEventListener('click', () => { ficha.hidden = true; });

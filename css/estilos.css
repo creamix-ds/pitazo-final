@@ -305,12 +305,35 @@ tr.es-favorito { background: var(--celeste-suave) !important; }
 .mapa-ar__tip b { font-weight: 700; }
 .mapa-ar__tip span { color: var(--tinta-2); }
 .mapa-ar__ficha {
-  position: absolute; z-index: 4; width: 270px; background: #fff; color: var(--tinta);
+  position: absolute; z-index: 4; width: 290px; max-width: calc(100% - 20px); background: #fff; color: var(--tinta);
   border-radius: var(--radio); padding: 16px; box-shadow: 0 12px 32px rgba(0,0,0,0.35);
 }
 .mapa-ar__ficha h3 { font-size: 1.25rem; padding-right: 24px; }
 .mapa-ar__ficha p { color: var(--tinta-2); font-size: 0.88rem; margin: 2px 0 10px; }
-.mapa-ar__ficha ul { margin: 8px 0 0; padding-left: 18px; }
+.mapa-ar__ficha ul {
+  list-style: none; margin: 10px -6px 0; padding: 2px 4px 2px 2px;
+  max-height: min(320px, 42vh); overflow-y: scroll; overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.mapa-ar__ficha li { margin: 0; }
+.mapa-ar__ficha li a {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 9px 10px; border-radius: 9px; text-decoration: none;
+  color: var(--tinta); font-size: 0.92rem; font-weight: 500; line-height: 1.25;
+  transition: background .15s ease, color .15s ease;
+}
+.mapa-ar__ficha li a::before {
+  content: ""; flex: none; width: 7px; height: 7px; margin-top: .42em;
+  border-radius: 50%; background: var(--celeste); transition: transform .15s ease;
+}
+.mapa-ar__ficha li a:hover, .mapa-ar__ficha li a:focus-visible {
+  background: #eaf2fb; color: #1e5aa8; outline: none;
+}
+.mapa-ar__ficha li a:hover::before { transform: scale(1.35); }
+.mapa-ar__ficha ul::-webkit-scrollbar { width: 12px; }
+.mapa-ar__ficha ul::-webkit-scrollbar-track { background: #eef2f7; border-radius: 8px; margin: 2px 0; }
+.mapa-ar__ficha ul::-webkit-scrollbar-thumb { background: #9fb3cc; border-radius: 8px; border: 3px solid #fff; background-clip: padding-box; }
+.mapa-ar__ficha ul::-webkit-scrollbar-thumb:hover { background: #7d93af; border-width: 3px; background-clip: padding-box; }
 .mapa-ar__ficha .boton { width: 100%; justify-content: center; margin-top: 12px; }
 .mapa-ar__cerrar { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border: 0; border-radius: 50%; background: var(--fondo); color: var(--tinta-2); font-size: 1.1rem; cursor: pointer; line-height: 1; }
 .mapa-ar__cerrar:hover { background: var(--linea); color: var(--tinta); }
