@@ -579,6 +579,26 @@
     return `<label class="filtro"><span>${esc(etiqueta)}</span><select id="${id}">${opciones.map(([v, n]) => `<option value="${esc(v)}" ${String(v) === String(valor) ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>`;
   }
 
+  // Torneos agrupados por liga, para que no queden todos mezclados en una lista larga.
+  const torneosVisibles = () => T('torneos').filter(t => esDev() || misLigas().some(l => l.id === t.liga_id) || juegaAlgunoMio(t));
+  const nombreTorneo = t => `${t.nombre} ${t.temporada}${t.categoria ? ', ' + t.categoria : ''}`;
+  function opcionesTorneosHTML(valor) {
+    const tors = torneosVisibles();
+    const porLiga = {};
+    tors.forEach(t => { (porLiga[t.liga_id] = porLiga[t.liga_id] || []).push(t); });
+    return Object.keys(porLiga)
+      .map(lid => porId('ligas', lid) || { id: lid, nombre: '—' })
+      .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''))
+      .map(l => `<optgroup label="${esc(l.nombre)}">${porLiga[l.id]
+        .map(t => `<option value="${esc(t.id)}" ${String(t.id) === String(valor) ? 'selected' : ''}>${esc(nombreTorneo(t))}</option>`).join('')}</optgroup>`)
+      .join('');
+  }
+  function selectorTorneosEn($c, id, valor, alCambiar) {
+    if (torneosVisibles().length < 2) return '';
+    setTimeout(() => { const s = $c.querySelector('#' + id); if (s) s.addEventListener('change', () => alCambiar(s.value)); });
+    return `<label class="filtro"><span>Torneo</span><select id="${id}">${opcionesTorneosHTML(valor)}</select></label>`;
+  }
+
   // ---------- Resultados ----------
   const filtro = { torneo: null, fecha: null, club: null, verInactivos: false, liga: null, ligaNoticias: null };
   function torneoElegido() {
@@ -618,7 +638,7 @@
     const proximo = partidos.find(p => p.estado !== 'Finalizado');
     $c.innerHTML = `<section class="panel">
       <div class="panel__cabeza"><h2>${esDev() ? `Fecha ${filtro.fecha}` : 'Partidos de tu club'}</h2>
-        ${selectorEn($c, 'sel-torneo', 'Torneo', opTorneos(), tid, v => { filtro.torneo = v; filtro.fecha = null; vistaPanel(); })}</div>
+        ${selectorTorneosEn($c, 'sel-torneo', tid, v => { filtro.torneo = v; filtro.fecha = null; vistaPanel(); })}</div>
       ${esDev() ? `<nav class="fechas" aria-label="Elegir fecha">${fechas.map(f => `<a href="#" data-fecha="${f}" ${f === filtro.fecha ? 'aria-current="page"' : ''}>F${f}</a>`).join('')}</nav>` : ''}
       ${partidos.length ? `<ul class="lista-admin">${partidos.map(p => `<li><button type="button" class="fila-admin fila-partido${proximo && p.id === proximo.id ? ' es-proximo' : ''}" data-id="${esc(p.id)}">
           <span class="fila-partido__fecha">F${esc(p.fecha_nro)}<small>${fecha(p.fecha_jugada || p.fecha_programada)}</small></span>
@@ -772,7 +792,7 @@
     const tid = torneoElegido();
     editorTabla($c, {
       tabla: 'Partidos', titulo: 'Fixture', nuevoTexto: 'Agregar partido',
-      filtros: `<div class="barra-filtros">${selectorEn($c, 'sel-torneo-fx', 'Torneo', opTorneos(), tid, v => { filtro.torneo = v; vistaPanel(); })}</div>`,
+      filtros: `<div class="barra-filtros">${selectorTorneosEn($c, 'sel-torneo-fx', tid, v => { filtro.torneo = v; vistaPanel(); })}</div>`,
       items: () => T('partidos').filter(p => p.torneo_id === tid).sort((a, b) => num(a.fecha_nro) - num(b.fecha_nro)),
       resumen: p => ({ t: `${nombreEquipo(p.local_id)} vs ${nombreEquipo(p.visitante_id)}`, s: `Fecha ${esc(p.fecha_nro)}, ${fecha(p.fecha_programada) || 'sin fecha'}${p.hora ? ', ' + esc(p.hora) : ''}`, der: chipEstado(p) }),
       porDefecto: () => {
@@ -797,7 +817,7 @@
         quitar: ['_local', '_visitante'], refNombre: 'equipo reconocido', ref: f => `${f._local || '?'} vs ${f._visitante || '?'}`,
         placeholder: '1, Maderense, Progreso, 2, 1\n1, Huracán FC, Calaveras, 0, 0\n2, KDT, Deportivo Argentino, 0, 1',
         ayuda: 'Una línea por partido: <b>Fecha, Local, Visitante, GolesLocal, GolesVisitante</b>. Si dejás los goles vacíos, el partido queda "Programado"; con goles, "Finalizado". Usá los nombres de los clubes de la liga.',
-        contextoHTML: () => `<div class="campo"><label for="masivo-torneo">Torneo</label><select id="masivo-torneo">${opTorneos().map(o => `<option value="${esc(o[0])}" ${o[0] === tid ? 'selected' : ''}>${esc(o[1])}</option>`).join('')}</select></div>`,
+        contextoHTML: () => `<div class="campo"><label for="masivo-torneo">Torneo</label><select id="masivo-torneo">${opcionesTorneosHTML(tid)}</select></div>`,
         resolver: (fila, form) => {
           const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
           const torneoId = (form.querySelector('#masivo-torneo') || {}).value;
