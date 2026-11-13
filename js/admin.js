@@ -456,13 +456,31 @@
   function cargaMasiva(cfg) {
     const m = cfg.masivo, cols = m.columnas, tanda = m.tanda || 40;
     const unidad = m.unidad || 'registro', plural = m.unidadPlural || unidad + 's';
-    const parsear = txt => txt.split(/\r?\n/).map(l => l.trim()).filter(Boolean).map(linea => {
+    const limpiarLinea = l => String(l || '').replace(/^[\s*•·\-–]+/, '')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\[[^\]]*\]/g, '').trim();
+    const limpiarVal = v => { const s = String(v == null ? '' : v).trim(); return /^(s\/?d|n\/?d|s\.?d\.?|-|–|—|\.|\?)$/i.test(s) ? '' : s; };
+    const parsear = txt => txt.split(/\r?\n/).map(limpiarLinea).filter(Boolean).map(linea => {
       const partes = (linea.indexOf('\t') >= 0 ? linea.split('\t') : linea.split(',')).map(x => x.trim());
       const fila = {};
-      cols.forEach((k, i) => { if (partes[i] != null && partes[i] !== '') fila[k] = partes[i]; });
+      cols.forEach((k, i) => { const v = limpiarVal(partes[i]); if (v !== '') fila[k] = v; });
       return fila;
     });
-    const valido = f => (m.requerido || []).every(k => f[k] != null && f[k] !== '');
+    const completa = f => (m.requerido || []).every(k => f[k] != null && f[k] !== '');
+    const preparar = (txt, form) => {
+      let fijos = {};
+      if (!m.resolver && m.fijos) fijos = m.fijos(form);
+      const listas = [], fallan = [];
+      parsear(txt).forEach(f => {
+        if (!completa(f)) return;
+        if (m.resolver) {
+          const r = m.resolver(f, form);
+          if (!r || !r.ok) { fallan.push({ ref: m.ref ? m.ref(f) : '', motivo: (r && r.motivo) || 'no se pudo ubicar' }); return; }
+          const limpia = Object.assign({}, f); (m.quitar || []).forEach(k => delete limpia[k]);
+          listas.push(Object.assign({}, r.extra, limpia));
+        } else listas.push(Object.assign({}, fijos, f));
+      });
+      return { listas, fallan };
+    };
     abrirCajon('Pegar lista', `<form id="form-masivo" novalidate>
       ${m.contextoHTML ? m.contextoHTML() : ''}
       <div class="campo"><label for="masivo-txt">Pegá la lista — una línea por ${esc(unidad)}</label>
@@ -474,20 +492,26 @@
     </form>`, (cuerpo, cerrar) => {
       const form = cuerpo.querySelector('#form-masivo');
       const $txt = form.querySelector('#masivo-txt'), $res = form.querySelector('#masivo-resumen');
-      const validas = () => parsear($txt.value).filter(valido);
-      const resumen = () => { const n = validas().length; $res.textContent = n ? `Se van a crear ${n} ${n === 1 ? unidad : plural}.` : 'Pegá al menos una línea.'; };
-      $txt.addEventListener('input', resumen); resumen();
+      const resumen = () => {
+        let r; try { r = preparar($txt.value, form); } catch (e) { $res.textContent = ''; return; }
+        const n = r.listas.length;
+        $res.textContent = (n ? `Se van a crear ${n} ${n === 1 ? unidad : plural}.` : 'Pegá al menos una línea.')
+          + (r.fallan.length ? ` Se saltean ${r.fallan.length} sin ${m.refNombre || 'ubicar'}${r.fallan[0].ref ? ': ' + r.fallan.slice(0, 4).map(x => x.ref).join(', ') + (r.fallan.length > 4 ? '…' : '') : ''}.` : '');
+      };
+      $txt.addEventListener('input', resumen); form.addEventListener('change', resumen);
+      if (m.alMontar) m.alMontar(form);
+      resumen();
       form.addEventListener('submit', async ev => {
         ev.preventDefault();
         const $err = form.querySelector('#masivo-error'); $err.hidden = true;
-        let fijos;
-        try { fijos = m.fijos ? m.fijos(form) : {}; } catch (e) { $err.hidden = false; $err.textContent = e.message; return; }
-        const filas = validas().map(f => Object.assign({}, fijos, f));
+        let r;
+        try { r = preparar($txt.value, form); } catch (e) { $err.hidden = false; $err.textContent = e.message; return; }
+        const filas = r.listas;
         if (!filas.length) { $err.hidden = false; $err.textContent = 'No hay líneas válidas para crear.'; return; }
         for (let i = 0; i < filas.length; i += tanda) {
           const chunk = filas.slice(i, i + tanda);
-          const r = await guardar(chunk.map(fila => ({ op: 'crear', tabla: cfg.tabla, fila })), i + tanda >= filas.length ? `Se crearon ${filas.length} ${filas.length === 1 ? unidad : plural}.` : '');
-          if (!r) return;
+          const ok = await guardar(chunk.map(fila => ({ op: 'crear', tabla: cfg.tabla, fila })), i + tanda >= filas.length ? `Se crearon ${filas.length} ${filas.length === 1 ? unidad : plural}.${r.fallan.length ? ' (' + r.fallan.length + ' sin ' + (m.refNombre || 'ubicar') + ', no se cargaron.)' : ''}` : '');
+          if (!ok) return;
         }
         cerrar(); vistaPanel();
       });
@@ -948,11 +972,30 @@
       porDefecto: () => ({ equipo_id: (equipos[0] || {}).id, activo: 'SI' }),
       masivo: {
         unidad: 'jugador', unidadPlural: 'jugadores', requerido: ['apellido'],
-        columnas: ['apellido', 'nombre', 'numero', 'posicion'],
-        placeholder: 'Pérez, Juan, 9, Delantero\nGómez, Luis, 5, Mediocampista\nLópez, Mario',
-        ayuda: 'Una línea por jugador, con los datos separados por coma o tabulación (podés pegar desde Excel). Orden: <b>Apellido, Nombre, N°, Posición</b>. Solo el apellido es obligatorio.',
-        contextoHTML: () => equipos.length > 1 ? `<div class="campo"><label for="masivo-eq">Equipo / categoría</label><select id="masivo-eq">${equipos.map(e => `<option value="${esc(e.id)}">${esc(e.categoria)}</option>`).join('')}</select></div>` : '',
-        fijos: form => { const eq = equipos.length > 1 ? form.querySelector('#masivo-eq').value : (equipos[0] || {}).id; if (!eq) throw new Error('Este club todavía no tiene una categoría. Agregá una antes de cargar el plantel.'); return { equipo_id: eq, activo: 'SI' }; }
+        columnas: ['apellido', 'nombre', 'numero', 'posicion', '_club'],
+        quitar: ['_club'], refNombre: 'club de la liga', ref: f => f._club || '',
+        placeholder: 'Mosescu, Juan Ignacio, 1, Arquero, Jorge Newbery (Venado Tuerto)\nFerri, Brian, , Arquero, Sportivo Rivadavia (Venado Tuerto)\nBarucco, Rodrigo, , Arquero, Studebaker (Villa Cañás)',
+        ayuda: 'Elegí la liga arriba; cada jugador va al <b>club</b> que pongas en la última columna. Formato: <b>Apellido, Nombre, N°, Posición, Club (Ciudad)</b>. El N°, la posición y la ciudad pueden ir vacíos; "S/D" se toma como vacío. La ciudad ayuda a distinguir clubes con el mismo nombre.',
+        contextoHTML: () => { const ls = misLigas(); return `<div class="campo"><label for="masivo-liga">Liga</label><select id="masivo-liga">${ls.map(l => `<option value="${esc(l.id)}" ${l.id === (club.liga_id || '') ? 'selected' : ''}>${esc(l.nombre)}</option>`).join('')}</select></div><p class="nota" id="masivo-clubes" style="margin:0 0 10px"></p>`; },
+        alMontar: form => {
+          const sel = form.querySelector('#masivo-liga'), cont = form.querySelector('#masivo-clubes');
+          if (!sel || !cont) return;
+          const pintar = () => { const cl = T('clubes').filter(c => c.liga_id === sel.value).sort((a, b) => a.nombre.localeCompare(b.nombre)); cont.innerHTML = cl.length ? `<b>Clubes de esta liga</b> (usá estos nombres): ${cl.map(c => esc(c.nombre)).join(' · ')}` : 'Esta liga todavía no tiene clubes cargados. Cargá los clubes primero.'; };
+          sel.addEventListener('change', pintar); pintar();
+        },
+        resolver: (fila, form) => {
+          const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+          const ligaId = (form.querySelector('#masivo-liga') || {}).value;
+          if (!fila._club) return { ok: false, motivo: 'falta el club' };
+          const mm = String(fila._club).match(/^(.*?)\s*(?:\(([^)]*)\))?\s*$/) || [];
+          const nom = norm(mm[1] || fila._club), ciu = norm(mm[2] || '');
+          const deLiga = T('clubes').filter(c => c.liga_id === ligaId && norm(c.nombre) === nom);
+          const club2 = (ciu && deLiga.find(c => norm(c.ciudad) === ciu)) || (deLiga.length === 1 ? deLiga[0] : null);
+          if (!club2) return { ok: false, motivo: deLiga.length > 1 ? 'club ambiguo: aclará la ciudad' : 'club no está en esta liga' };
+          const eq = T('equipos').find(e => e.club_id === club2.id && e.categoria === 'Primera') || T('equipos').find(e => e.club_id === club2.id);
+          if (!eq) return { ok: false, motivo: 'el club no tiene equipo' };
+          return { ok: true, extra: { equipo_id: eq.id, activo: 'SI' } };
+        }
       },
       campos: camposJug,
       puedeBorrar: j => esDev() && !T('eventos').some(e => e.jugador_id === j.id),
