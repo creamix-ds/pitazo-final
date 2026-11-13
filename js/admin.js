@@ -791,6 +791,34 @@
         }
         return [{ op: 'crear', tabla: 'Partidos', fila: datos }];
       },
+      masivo: {
+        unidad: 'partido', unidadPlural: 'partidos', requerido: ['_local', '_visitante'],
+        columnas: ['fecha_nro', '_local', '_visitante', 'goles_local', 'goles_visitante'],
+        quitar: ['_local', '_visitante'], refNombre: 'equipo reconocido', ref: f => `${f._local || '?'} vs ${f._visitante || '?'}`,
+        placeholder: '1, Maderense, Progreso, 2, 1\n1, Huracán FC, Calaveras, 0, 0\n2, KDT, Deportivo Argentino, 0, 1',
+        ayuda: 'Una línea por partido: <b>Fecha, Local, Visitante, GolesLocal, GolesVisitante</b>. Si dejás los goles vacíos, el partido queda "Programado"; con goles, "Finalizado". Usá los nombres de los clubes de la liga.',
+        contextoHTML: () => `<div class="campo"><label for="masivo-torneo">Torneo</label><select id="masivo-torneo">${opTorneos().map(o => `<option value="${esc(o[0])}" ${o[0] === tid ? 'selected' : ''}>${esc(o[1])}</option>`).join('')}</select></div>`,
+        resolver: (fila, form) => {
+          const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+          const torneoId = (form.querySelector('#masivo-torneo') || {}).value;
+          const t = porId('torneos', torneoId);
+          const ligaId = t ? t.liga_id : '';
+          const eqDe = nombre => {
+            const mm = String(nombre || '').match(/^(.*?)\s*(?:\(([^)]*)\))?\s*$/) || [];
+            const nom = norm(mm[1] || nombre), ciu = norm(mm[2] || '');
+            const cls = T('clubes').filter(c => c.liga_id === ligaId && norm(c.nombre) === nom);
+            const club = (ciu && cls.find(c => norm(c.ciudad) === ciu)) || (cls.length === 1 ? cls[0] : null);
+            if (!club) return null;
+            return ((T('equipos').find(e => e.club_id === club.id && e.categoria === 'Primera') || T('equipos').find(e => e.club_id === club.id)) || {}).id || null;
+          };
+          const L = eqDe(fila._local), V = eqDe(fila._visitante);
+          if (!L) return { ok: false, motivo: 'local no encontrado' };
+          if (!V) return { ok: false, motivo: 'visitante no encontrado' };
+          if (L === V) return { ok: false, motivo: 'local = visitante' };
+          const conGoles = ['goles_local', 'goles_visitante'].every(k => fila[k] != null && fila[k] !== '');
+          return { ok: true, extra: { torneo_id: torneoId, local_id: L, visitante_id: V, estado: conGoles ? 'Finalizado' : 'Programado' } };
+        }
+      },
       campos: f => {
         const t = porId('torneos', f.torneo_id || tid);
         const ids = new Set(participantesDe(t));
