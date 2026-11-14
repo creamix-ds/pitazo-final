@@ -290,7 +290,7 @@
 
   // ---------- panel ----------
   function secciones() {
-    if (esDev()) return [['resultados', 'Resultados'], ['fixture', 'Fixture'], ['plantel', 'Planteles'], ['clubes', 'Clubes'], ['noticias', 'Noticias'], ['torneos', 'Torneos'], ['ligas', 'Ligas'], ['usuarios', 'Usuarios']];
+    if (esDev()) return [['resultados', 'Resultados'], ['fixture', 'Fixture'], ['goleadores', 'Goleadores'], ['plantel', 'Planteles'], ['clubes', 'Clubes'], ['noticias', 'Noticias'], ['torneos', 'Torneos'], ['ligas', 'Ligas'], ['usuarios', 'Usuarios']];
     return [['resultados', 'Resultados'], ['plantel', 'Plantel'], ['club', misClubes().length > 1 ? 'Mis clubes' : 'Mi club'], ['noticias', 'Noticias']];
   }
 
@@ -314,12 +314,12 @@
         .catch(e => { if (e.message !== '__sesion__') $c.innerHTML = `<p class="vacio">${esc(e.message)}</p>`; });
       return;
     }
-    ({ resultados: secResultados, fixture: secFixture, plantel: secPlantel, club: secMiClub, clubes: secClubes, noticias: secNoticias, torneos: secTorneos, ligas: secLigas, usuarios: secUsuarios }[sec])($c, rutaActual.slice(1));
+    ({ resultados: secResultados, fixture: secFixture, goleadores: secGoleadores, plantel: secPlantel, club: secMiClub, clubes: secClubes, noticias: secNoticias, torneos: secTorneos, ligas: secLigas, usuarios: secUsuarios }[sec])($c, rutaActual.slice(1));
   }
 
   // Ligas que necesita cada sección del panel.
   function ligasPara(sec) {
-    if (sec === 'resultados' || sec === 'fixture') {
+    if (sec === 'resultados' || sec === 'fixture' || sec === 'goleadores') {
       const t = porId('torneos', torneoElegido());
       return t ? [t.liga_id].concat(ligasDeTorneo(t)) : [];
     }
@@ -1161,6 +1161,100 @@
       puedeBorrar: propia,
       confirmarBorrar: '¿Borrar esta noticia?',
       vacio: 'Todavía no hay noticias. Publicá la primera con el botón de arriba.'
+    });
+  }
+
+  // ---------- Goleadores ----------
+  const nombreJug = j => `${j.nombre || ''} ${j.apellido || ''}`.trim() || j.id;
+  const clubDeJug = j => { const e = porId('equipos', j.equipo_id); const c = e ? porId('clubes', e.club_id) : null; return c ? c.nombre : ''; };
+  const normNom = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+
+  function secGoleadores($c) {
+    const tid = torneoElegido();
+    const pids = new Set(T('partidos').filter(p => p.torneo_id === tid).map(p => String(p.id)));
+    const conteo = {};
+    T('eventos').filter(e => e.tipo === 'Gol' && pids.has(String(e.partido_id))).forEach(e => { conteo[e.jugador_id] = (conteo[e.jugador_id] || 0) + 1; });
+    const lista = Object.keys(conteo).map(jid => ({ j: porId('jugadores', jid), g: conteo[jid] }))
+      .filter(x => x.j).sort((a, b) => b.g - a.g || nombreJug(a.j).localeCompare(nombreJug(b.j)));
+    $c.innerHTML = `<section class="panel">
+      <div class="panel__cabeza"><h2>Goleadores</h2><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="boton boton--primario" type="button" id="btn-gol">Cargar goleadores</button></div></div>
+      <div class="barra-filtros">${selectorTorneosEn($c, 'sel-torneo-gol', tid, v => { filtro.torneo = v; vistaPanel(); })}</div>
+      ${lista.length ? `<ul class="lista-admin">${lista.map((x, i) => `<li><span class="fila-admin" style="cursor:default"><span class="fila-admin__texto"><b>${i + 1}. ${esc(nombreJug(x.j))}</b><small>${esc(clubDeJug(x.j))}</small></span><span class="fila-admin__der">${x.g} ${x.g === 1 ? 'gol' : 'goles'}</span></span></li>`).join('')}</ul>`
+        : '<p class="vacio">Todavía no hay goleadores en este torneo. Cargalos con el botón de arriba.</p>'}</section>`;
+    const b = $c.querySelector('#btn-gol');
+    if (b) b.addEventListener('click', () => cajonGoleadores(tid));
+  }
+
+  function cajonGoleadores(tidDefault) {
+    abrirCajon('Cargar goleadores', `<form id="form-gol" novalidate>
+      <div class="campo"><label for="gol-torneo">Torneo</label><select id="gol-torneo">${opcionesTorneosHTML(tidDefault)}</select></div>
+      <div class="campo"><label for="gol-txt">Una línea por jugador — <b>Jugador, Club, Goles</b></label>
+        <textarea id="gol-txt" rows="9" placeholder="Nicolás Legammari, Estudiantes Unidos, 6&#10;Matías Soria, Progreso, 5"></textarea>
+        <small>Si el jugador no existe, se crea en su club. Los goles se cargan en el torneo elegido y no cambian los marcadores.</small></div>
+      <p class="nota" id="gol-res" style="margin:4px 0 0"></p>
+      <p class="error-form" id="gol-err" role="alert" hidden></p>
+      <div class="acciones acciones--form"><button class="boton boton--primario" type="submit" data-guardar>Cargar</button></div>
+    </form>`, (cuerpo, cerrar) => {
+      const form = cuerpo.querySelector('#form-gol');
+      const $txt = form.querySelector('#gol-txt'), $res = form.querySelector('#gol-res');
+      const parse = () => {
+        const torneoId = (form.querySelector('#gol-torneo') || {}).value;
+        const t = porId('torneos', torneoId), ligaId = t ? t.liga_id : '';
+        const filas = [], fallan = [];
+        String($txt.value).split(/\r?\n/).map(l => l.replace(/^[\s*•·\-–]+/, '').trim()).filter(Boolean).forEach(linea => {
+          const p = linea.split(/\t|,/).map(x => x.trim());
+          const nombre = p[0], clubTxt = p[1], golesTxt = p[2];
+          if (!nombre || !clubTxt || !golesTxt) { fallan.push(nombre || '?'); return; }
+          const goles = Number(golesTxt);
+          if (!(goles > 0)) { fallan.push(nombre + ' (goles?)'); return; }
+          const mm = String(clubTxt).match(/^(.*?)\s*(?:\(([^)]*)\))?\s*$/) || [];
+          const nom = normNom(mm[1] || clubTxt), ciu = normNom(mm[2] || '');
+          const cls = T('clubes').filter(c => c.liga_id === ligaId && normNom(c.nombre) === nom);
+          const club = (ciu && cls.find(c => normNom(c.ciudad) === ciu)) || (cls.length === 1 ? cls[0] : null);
+          if (!club) { fallan.push(nombre + ' (club?)'); return; }
+          const eq = T('equipos').find(e => e.club_id === club.id && e.categoria === 'Primera') || T('equipos').find(e => e.club_id === club.id);
+          if (!eq) { fallan.push(nombre + ' (equipo?)'); return; }
+          const ws = nombre.split(/\s+/);
+          filas.push({ apellido: ws.length > 1 ? ws[ws.length - 1] : nombre, nombre: ws.length > 1 ? ws.slice(0, -1).join(' ') : '', equipo_id: eq.id, goles, ref: nombre });
+        });
+        return { filas, fallan, torneoId, ligaId };
+      };
+      const resumen = () => { let r; try { r = parse(); } catch (e) { $res.textContent = ''; return; } const n = r.filas.length; $res.textContent = (n ? `Se van a cargar ${n} goleador${n === 1 ? '' : 'es'}.` : 'Pegá al menos una línea.') + (r.fallan.length ? ` Se saltean ${r.fallan.length}: ${r.fallan.slice(0, 4).join(', ')}${r.fallan.length > 4 ? '…' : ''}.` : ''); };
+      $txt.addEventListener('input', resumen); form.addEventListener('change', resumen); resumen();
+      form.addEventListener('submit', async ev => {
+        ev.preventDefault();
+        const $err = form.querySelector('#gol-err'); $err.hidden = true;
+        const r = parse();
+        if (!r.filas.length) { $err.hidden = false; $err.textContent = 'No hay líneas válidas para cargar.'; return; }
+        const clave = f => f.equipo_id + '|' + normNom(f.nombre + ' ' + f.apellido);
+        const idDe = {}, nuevos = [];
+        r.filas.forEach(f => {
+          const k = clave(f);
+          if (idDe[k] || nuevos.some(n => clave(n) === k)) return;
+          const ex = T('jugadores').find(j => String(j.equipo_id) === String(f.equipo_id) && normNom((j.nombre || '') + ' ' + (j.apellido || '')) === normNom(f.nombre + ' ' + f.apellido));
+          if (ex) idDe[k] = ex.id; else nuevos.push(f);
+        });
+        for (let i = 0; i < nuevos.length; i += 40) {
+          const chunk = nuevos.slice(i, i + 40);
+          const creados = await guardar(chunk.map(f => ({ op: 'crear', tabla: 'Jugadores', liga: r.ligaId, fila: { equipo_id: f.equipo_id, apellido: f.apellido, nombre: f.nombre, activo: 'SI' } })), '');
+          if (!creados) return;
+          creados.forEach((id, j) => { idDe[clave(chunk[j])] = id; });
+        }
+        const evOps = [];
+        r.filas.forEach(f => {
+          const jid = idDe[clave(f)];
+          if (!jid) return;
+          const partidos = T('partidos').filter(p => String(p.torneo_id) === String(r.torneoId) && (String(p.local_id) === String(f.equipo_id) || String(p.visitante_id) === String(f.equipo_id)));
+          if (!partidos.length) return;
+          for (let g = 0; g < f.goles; g++) { const pp = partidos[g % partidos.length]; evOps.push({ op: 'crear', tabla: 'Eventos', liga: r.ligaId, fila: { partido_id: pp.id, tipo: 'Gol', jugador_id: jid, equipo_id: f.equipo_id } }); }
+        });
+        if (!evOps.length) { $err.hidden = false; $err.textContent = 'No se pudieron asociar goles: ¿cargaste los partidos de este torneo?'; return; }
+        for (let i = 0; i < evOps.length; i += 40) {
+          const ok = await guardar(evOps.slice(i, i + 40), i + 40 >= evOps.length ? `Se cargaron ${evOps.length} goles de ${r.filas.length} goleadores.` : '');
+          if (!ok) return;
+        }
+        cerrar(); vistaPanel();
+      });
     });
   }
 
