@@ -454,17 +454,19 @@
   // Carga masiva: pegar una lista (una línea por registro) y crear todo en tandas.
   // Se activa por tabla con cfg.masivo = { columnas, requerido, unidad, ayuda, placeholder, contextoHTML, fijos, tanda }.
   function cargaMasiva(cfg) {
-    const m = cfg.masivo, cols = m.columnas, tanda = m.tanda || 40;
+    const m = cfg.masivo, tanda = m.tanda || 40;
+    const colsDe = () => typeof m.columnas === 'function' ? m.columnas() : m.columnas;
+    const txtDe = v => typeof v === 'function' ? v() : v;
     const unidad = m.unidad || 'registro', plural = m.unidadPlural || unidad + 's';
     const limpiarLinea = l => String(l || '').replace(/^[\s*•·\-–]+/, '')
       .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\[[^\]]*\]/g, '').trim();
     const limpiarVal = v => { const s = String(v == null ? '' : v).trim(); return /^(s\/?d|n\/?d|s\.?d\.?|-|–|—|\.|\?)$/i.test(s) ? '' : s; };
-    const parsear = txt => txt.split(/\r?\n/).map(limpiarLinea).filter(Boolean).map(linea => {
+    const parsear = txt => { const cols = colsDe(); return txt.split(/\r?\n/).map(limpiarLinea).filter(Boolean).map(linea => {
       const partes = (linea.indexOf('\t') >= 0 ? linea.split('\t') : linea.split(',')).map(x => x.trim());
       const fila = {};
       cols.forEach((k, i) => { const v = limpiarVal(partes[i]); if (v !== '') fila[k] = v; });
       return fila;
-    });
+    }); };
     const completa = f => (m.requerido || []).every(k => f[k] != null && f[k] !== '');
     const preparar = (txt, form) => {
       let fijos = {};
@@ -484,8 +486,8 @@
     abrirCajon('Pegar lista', `<form id="form-masivo" novalidate>
       ${m.contextoHTML ? m.contextoHTML() : ''}
       <div class="campo"><label for="masivo-txt">Pegá la lista — una línea por ${esc(unidad)}</label>
-        <textarea id="masivo-txt" rows="9" placeholder="${esc(m.placeholder || '')}"></textarea>
-        ${m.ayuda ? `<small>${m.ayuda}</small>` : ''}</div>
+        <textarea id="masivo-txt" rows="9" placeholder="${esc(txtDe(m.placeholder) || '')}"></textarea>
+        ${m.ayuda ? `<small>${txtDe(m.ayuda)}</small>` : ''}</div>
       <p class="nota" id="masivo-resumen" style="margin:4px 0 0"></p>
       <p class="error-form" id="masivo-error" role="alert" hidden></p>
       <div class="acciones acciones--form"><button class="boton boton--primario" type="submit" data-guardar>Crear</button></div>
@@ -790,6 +792,7 @@
   // ---------- Fixture (dev) ----------
   function secFixture($c) {
     const tid = torneoElegido();
+    const torneoMasivo = () => porId('torneos', (document.querySelector('#masivo-torneo') || {}).value || tid);
     editorTabla($c, {
       tabla: 'Partidos', titulo: 'Fixture', nuevoTexto: 'Agregar partido',
       filtros: `<div class="barra-filtros">${selectorTorneosEn($c, 'sel-torneo-fx', tid, v => { filtro.torneo = v; vistaPanel(); })}</div>`,
@@ -813,10 +816,14 @@
       },
       masivo: {
         unidad: 'partido', unidadPlural: 'partidos', requerido: ['_local', '_visitante'],
-        columnas: ['fecha_nro', '_local', '_visitante', 'goles_local', 'goles_visitante'],
+        columnas: () => esLlave(torneoMasivo()) ? ['fase', 'llave', 'fecha_nro', '_local', '_visitante', 'goles_local', 'goles_visitante', 'penales'] : ['fecha_nro', '_local', '_visitante', 'goles_local', 'goles_visitante'],
         quitar: ['_local', '_visitante'], refNombre: 'equipo reconocido', ref: f => `${f._local || '?'} vs ${f._visitante || '?'}`,
-        placeholder: '1, Maderense, Progreso, 2, 1\n1, Huracán FC, Calaveras, 0, 0\n2, KDT, Deportivo Argentino, 0, 1',
-        ayuda: 'Una línea por partido: <b>Fecha, Local, Visitante, GolesLocal, GolesVisitante</b>. Si dejás los goles vacíos, el partido queda "Programado"; con goles, "Finalizado". Usá los nombres de los clubes de la liga.',
+        placeholder: () => esLlave(torneoMasivo())
+          ? 'Cuartos de final, 1, 1, Maderense, Atlético Mones Cazón, 2, 0, \nCuartos de final, 1, 2, Atlético Mones Cazón, Maderense, 2, 0, 4-2'
+          : '1, Maderense, Progreso, 2, 1\n1, Huracán FC, Calaveras, 0, 0\n2, KDT, Deportivo Argentino, 0, 1',
+        ayuda: () => esLlave(torneoMasivo())
+          ? 'Playoff, una línea por partido: <b>Fase, Llave, Fecha, Local, Visitante, GolesLocal, GolesVisitante, Penales</b>. Fecha 1 = ida, 2 = vuelta; la misma Llave une ida y vuelta. Penales (local-visitante) solo si el global quedó empatado, ej. 4-2; si no, dejalo vacío.'
+          : 'Una línea por partido: <b>Fecha, Local, Visitante, GolesLocal, GolesVisitante</b>. Si dejás los goles vacíos, el partido queda "Programado"; con goles, "Finalizado". Usá los nombres de los clubes de la liga.',
         contextoHTML: () => `<div class="campo"><label for="masivo-torneo">Torneo</label><select id="masivo-torneo">${opcionesTorneosHTML(tid)}</select></div>`,
         resolver: (fila, form) => {
           const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
