@@ -382,7 +382,7 @@
   const terminado = tid => { const ps = partidosDe(tid); return ps.length > 0 && ps.every(p => p.estado === 'Finalizado'); };
   const conJugados = tid => partidosDe(tid).some(p => p.estado === 'Finalizado');
   // T08:1-8 · T50:Zona A:1-2 · T50:1-2
-  const RE_CLASIFICA = /^(T\d+)\s*:\s*(?:([^:]+?)\s*:\s*)?(\d+)(?:\s*-\s*(\d+))?$/;
+  const RE_CLASIFICA = /^(T[A-Z]*\d+)\s*:\s*(?:([^:]+?)\s*:\s*)?(\d+)(?:\s*-\s*(\d+))?$/;
   let sembrando = new Set();
   function sembrados(t) {
     const segs = String(t.clasifica || '').split(/[,;]+/).map(x => x.trim()).filter(Boolean);
@@ -574,7 +574,16 @@
       });
       return `<small>${partes.join(' · ')}${c.pen ? ` · Penales ${esc(c.pen)}` : ''}</small>`;
     };
-    return `${provisorio ? '<p class="nota" style="margin:0 0 12px">Cruces provisorios según la tabla actual: se confirman cuando termine ' + fase + '.</p>' : ''}
+    const ultima = rondas[rondas.length - 1];
+    const esFinal = ultima && /final/i.test(ultima.nombre || '') && !/semi/i.test(ultima.nombre || '');
+    const cruceFinal = esFinal ? ultima.cruces.find(c => !c.bye && c.ganador) : null;
+    const campeon = cruceFinal ? cruceFinal.ganador : null;
+    const banda = campeon ? `<div class="llave__campeon" style="display:flex;align-items:center;justify-content:center;gap:12px;margin:0 auto 18px;padding:14px 20px;max-width:360px;background:linear-gradient(135deg,#fff8e8,#fdeec2);border:1px solid #e8cf85;border-radius:14px;box-shadow:0 2px 10px rgba(180,140,40,.18)">
+        <svg viewBox="0 0 24 24" width="36" height="36" aria-hidden="true" style="flex:none"><path d="M18 2H6v2H2v4a4 4 0 0 0 4 4h.3A6 6 0 0 0 11 15.9V18H8v2h8v-2h-3v-2.1A6 6 0 0 0 17.7 12H18a4 4 0 0 0 4-4V4h-4V2zM6 10a2 2 0 0 1-2-2V6h2v4zm14-2a2 2 0 0 1-2 2V6h2v2z" fill="#E5B84B"/></svg>
+        ${escudo(clubDeEquipo(campeon), 'l')}
+        <div style="line-height:1.2"><span style="display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:#9a7b2e;font-weight:700">Campeón</span><strong style="font-size:1.05rem;color:#5a4410">${esc(nombreEquipo(campeon))}</strong></div>
+      </div>` : '';
+    return `${provisorio ? '<p class="nota" style="margin:0 0 12px">Cruces provisorios según la tabla actual: se confirman cuando termine ' + fase + '.</p>' : ''}${banda}
       <div class="llave" style="--rondas:${rondas.length}">${rondas.map(r => `
         <section class="llave__ronda"><h3>${esc(r.nombre)}</h3><div class="llave__cruces">${r.cruces.map(c => {
           const g = c.ganador;
