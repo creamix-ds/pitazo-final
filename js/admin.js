@@ -581,7 +581,7 @@
 
   // Torneos agrupados por liga, para que no queden todos mezclados en una lista larga.
   const torneosVisibles = () => T('torneos').filter(t => esDev() || misLigas().some(l => l.id === t.liga_id) || juegaAlgunoMio(t));
-  const nombreTorneo = t => `${t.nombre} ${t.temporada}${t.categoria ? ', ' + t.categoria : ''}`;
+  const nombreTorneo = t => `${t.nombre} ${t.temporada}${t.categoria ? ', ' + t.categoria : ''} · ${t.id}`;
   function opcionesTorneosHTML(valor) {
     const tors = torneosVisibles();
     const porLiga = {};
@@ -1162,7 +1162,7 @@
     editorTabla($c, {
       tabla: 'Torneos', titulo: 'Torneos', nuevoTexto: 'Agregar torneo',
       items: () => T('torneos'),
-      resumen: t => { const n = ligasDeTorneo(t).length; return { t: `${t.nombre} ${t.temporada}`, s: [t.categoria, n > 1 ? `Entre ${n} ligas` : (porId('ligas', t.liga_id) || {}).nombre, `${participantesDe(t).length} equipos`, t.estado].filter(Boolean).map(esc).join(', '), der: `${partidosDeTorneo(t)} partidos` }; },
+      resumen: t => { const n = ligasDeTorneo(t).length; return { t: `${t.nombre} ${t.temporada}`, s: [`ID ${t.id}`, t.categoria, n > 1 ? `Entre ${n} ligas` : (porId('ligas', t.liga_id) || {}).nombre, `${participantesDe(t).length} equipos`, t.estado].filter(Boolean).map(esc).join(', '), der: `${partidosDeTorneo(t)} partidos` }; },
       porDefecto: () => ({ liga_id: (T('ligas')[0] || {}).id, temporada: String(new Date().getFullYear()), categoria: 'Primera' }),
       extraForm: () => selectorParticipantes(),
       alMontarForm: (form, t) => montarParticipantes(form, t),
