@@ -871,15 +871,58 @@
       confirmarBorrar: '¿Borrar este partido del fixture?',
       pie: (() => {
         const t = porId('torneos', tid);
-        if (!t || esLlave(t)) return '';
-        return `<p class="nota" style="margin-left:0"><button type="button" class="boton" id="btn-armar-fixture">Armar fixture automático</button> Todos contra todos${esGrupos(t) ? ' dentro de cada zona' : ''}.</p>`
-          + (esGrupos(t) && Number(t.playoffs) ? `<p class="nota" style="margin-left:0"><button type="button" class="boton" id="btn-armar-playoffs">Armar cruces de playoffs</button> Crea la próxima ronda con los equipos ya definidos.</p>` : '');
+        if (!t) return '';
+        let h = '';
+        if (!esLlave(t)) {
+          h += `<p class="nota" style="margin-left:0"><button type="button" class="boton" id="btn-armar-fixture">Armar fixture automático</button> Todos contra todos${esGrupos(t) ? ' dentro de cada zona' : ''}.</p>`;
+          if (esGrupos(t) && Number(t.playoffs)) h += `<p class="nota" style="margin-left:0"><button type="button" class="boton" id="btn-armar-playoffs">Armar cruces de playoffs</button> Crea la próxima ronda con los equipos ya definidos.</p>`;
+        }
+        const nPart = T('partidos').filter(p => p.torneo_id === tid).length;
+        if (nPart) {
+          h += `<p class="nota" style="margin-left:0;margin-top:14px;border-top:1px solid rgba(0,0,0,.1);padding-top:12px">`
+            + `<button type="button" class="boton" id="btn-borrar-fecha">Borrar fecha</button> `
+            + `<input type="number" id="borrar-fecha-nro" min="1" inputmode="numeric" placeholder="N°" style="width:64px;padding:6px 8px;vertical-align:middle"> `
+            + `&nbsp; <button type="button" class="boton boton--peligro" id="btn-borrar-fixture">Borrar todo el fixture (${nPart})</button>`
+            + `<small style="display:block;margin-top:6px">Elimina los partidos del torneo <b>${esc(t.nombre)}</b> (con sus goles). No se puede deshacer.</small></p>`;
+        }
+        return h;
       })(),
       alMontar: $x => {
         const b = $x.querySelector('#btn-armar-fixture'); if (b) b.addEventListener('click', () => armarFixture(porId('torneos', tid)));
         const c = $x.querySelector('#btn-armar-playoffs'); if (c) c.addEventListener('click', () => armarPlayoffs(porId('torneos', tid)));
+        const bf = $x.querySelector('#btn-borrar-fecha');
+        if (bf) bf.addEventListener('click', () => {
+          const nro = (($x.querySelector('#borrar-fecha-nro') || {}).value || '').trim();
+          if (!nro) { aviso('Escribí el número de fecha a borrar.'); return; }
+          const ps = T('partidos').filter(p => p.torneo_id === tid && num(p.fecha_nro) === num(nro));
+          if (!ps.length) { aviso('No hay partidos en la fecha ' + nro + ' de este torneo.'); return; }
+          if (!confirm('¿Borrar los ' + ps.length + ' partidos de la fecha ' + nro + '? No se puede deshacer.')) return;
+          borrarPartidos(ps);
+        });
+        const bt = $x.querySelector('#btn-borrar-fixture');
+        if (bt) bt.addEventListener('click', () => {
+          const ps = T('partidos').filter(p => p.torneo_id === tid);
+          if (!ps.length) { aviso('Este torneo no tiene partidos.'); return; }
+          if (!confirm('¿Borrar TODOS los ' + ps.length + ' partidos de este torneo? No se puede deshacer.')) return;
+          borrarPartidos(ps);
+        });
       }
     });
+  }
+
+  // Borra una lista de partidos (con sus goles/eventos) en tandas, a través del backend.
+  async function borrarPartidos(partidos) {
+    if (!partidos || !partidos.length) return;
+    const idsP = new Set(partidos.map(p => String(p.id)));
+    const ops = [];
+    T('eventos').filter(e => idsP.has(String(e.partido_id))).forEach(e => ops.push({ op: 'borrar', tabla: 'Eventos', id: e.id }));
+    partidos.forEach(p => ops.push({ op: 'borrar', tabla: 'Partidos', id: p.id }));
+    for (let i = 0; i < ops.length; i += 40) {
+      const r = await guardar(ops.slice(i, i + 40), null);
+      if (r === null) { aviso('Se cortó el borrado por un error. Reintentá.'); vistaPanel(); return; }
+    }
+    aviso('Listo: se borraron ' + partidos.length + ' partido' + (partidos.length === 1 ? '' : 's') + '.');
+    vistaPanel();
   }
   const esLlave = t => !!t && String(t.tipo || '').toLowerCase() === 'llave';
 
