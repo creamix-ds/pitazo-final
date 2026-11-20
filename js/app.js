@@ -150,7 +150,7 @@
     const uno = arr => [...new Set(arr.filter(Boolean))].filter(l => D.ligas.some(x => x.id === l));
     if (partes[0] === 'liga') { const l = ligaPorRuta(partes[1]); return l ? [l.id] : []; }
     if (partes[0] === 'club') {
-      const c = porId('clubes', partes[1]);
+      const c = clubPorRuta(partes[1]);
       if (!c) return [];
       const eids = new Set(D.equipos.filter(e => e.club_id === c.id).map(e => e.id));
       return uno([c.liga_id].concat(D.torneos.filter(t => participantesDe(t).some(e => eids.has(e))).map(t => t.liga_id)));
@@ -188,6 +188,15 @@
       usadosT.add(s.toLowerCase());
       t.slug = s;
     });
+    // Direccion de cada club (#/club/pirovano) a partir del nombre, igual que ligas y torneos.
+    const usadosC = new Set();
+    D.clubes.forEach(c => {
+      let s = aSlug(c.slug || c.nombre) || c.id;
+      if (usadosC.has(s.toLowerCase())) { const lg = porId('ligas', c.liga_id); s = s + (lg && lg.slug ? lg.slug : c.id); }
+      if (usadosC.has(s.toLowerCase())) s = s + c.id;
+      usadosC.add(s.toLowerCase());
+      c.slug = s;
+    });
     document.getElementById('pie-origen').textContent = origen;
   }
 
@@ -197,6 +206,11 @@
   const ligaPorRuta = x => {
     const k = String(x || '').toLowerCase();
     return D.ligas.find(l => String(l.slug).toLowerCase() === k) || D.ligas.find(l => String(l.id).toLowerCase() === k) || null;
+  };
+  // Club por su slug (nombre) o, para links viejos, por su id (CL06).
+  const clubPorRuta = x => {
+    const k = String(x || '').toLowerCase();
+    return D.clubes.find(c => String(c.slug).toLowerCase() === k) || D.clubes.find(c => String(c.id).toLowerCase() === k) || null;
   };
   // Link a una liga: acepta el objeto o el id.
   const urlLiga = (l, resto) => {
@@ -625,7 +639,7 @@
     return `<span class="${cls}" aria-hidden="true"><svg viewBox="0 0 32 36"><path d="${ESCUDO_PATH}"/></svg><span>${esc(iniciales(club.nombre))}</span></span>`;
   }
   const forma = lista => `<span class="forma" aria-label="Últimos resultados: ${lista.map(x => ({ G: 'ganó', E: 'empató', P: 'perdió' }[x])).join(', ')}">${lista.map(x => `<i class="${x}">${x}</i>`).join('')}</span>`;
-  const linkClub = eid => { const c = clubDeEquipo(eid); return c ? `#/club/${esc(c.id)}` : '#/'; };
+  const linkClub = eid => { const c = clubDeEquipo(eid); return c ? `#/club/${encodeURIComponent(c.slug)}` : '#/'; };
 
   function filaCompacta(p) {
     const fav = favorito();
@@ -982,7 +996,7 @@
     $s.innerHTML = `<div class="clubes">${c.map(club => {
       const eq = D.equipos.find(e => e.club_id === club.id);
       const i = eq ? tabla.findIndex(r => r.id === eq.id) : -1;
-      return `<a class="club-ficha" href="#/club/${esc(club.id)}">${escudo(club, 'm')}
+      return `<a class="club-ficha" href="#/club/${encodeURIComponent(club.slug)}">${escudo(club, 'm')}
         <span><h3>${esc(club.nombre)}</h3><p>${esc(club.ciudad)}${i >= 0 ? `. ${tabla[i].puesto || i + 1}° ${tabla[i].grupo ? 'en ' + esc(tabla[i].grupo) + ' ' : ''}con ${tabla[i].PTS} puntos` : ''}</p></span></a>`;
     }).join('')}</div>`;
   }
@@ -1065,15 +1079,15 @@
     $s.innerHTML = Object.keys(porLiga).map(lid => {
       const l = porId('ligas', lid);
       return `<section style="margin-bottom:28px"><h2 style="margin:0 0 12px">${l ? `<a href="${urlLiga(l)}" style="color:inherit">${esc(l.nombre)}</a>` : esc(lid)}</h2>
-        <div class="clubes">${porLiga[lid].sort((a, b) => a.nombre.localeCompare(b.nombre)).map(c => `<a class="club-ficha" href="#/club/${esc(c.id)}">${escudo(c, 'm')}<span><h3>${esc(c.nombre)}</h3><p>${esc(c.ciudad)}</p></span></a>`).join('')}</div></section>`;
+        <div class="clubes">${porLiga[lid].sort((a, b) => a.nombre.localeCompare(b.nombre)).map(c => `<a class="club-ficha" href="#/club/${encodeURIComponent(c.slug)}">${escudo(c, 'm')}<span><h3>${esc(c.nombre)}</h3><p>${esc(c.ciudad)}</p></span></a>`).join('')}</div></section>`;
     }).join('') || '<p class="vacio">Este torneo todavía no tiene equipos cargados.</p>';
   }
 
   function vistaClub(cid) {
-    const club = porId('clubes', cid);
+    const club = clubPorRuta(cid);
     if (!club) return vistaNoEncontrada('Ese club no existe.');
     const liga = porId('ligas', club.liga_id);
-    const equipos = D.equipos.filter(e => e.club_id === cid);
+    const equipos = D.equipos.filter(e => e.club_id === club.id);
     const eids = new Set(equipos.map(e => e.id));
     const principal = equipos[0];
     const t = liga ? torneoActual(liga.id) : null;
@@ -1279,7 +1293,12 @@
       if (liga && partes[1] !== liga.slug) history.replaceState(null, '', urlLiga(liga, partes.slice(2).join('/')));
       vistaLiga(liga ? liga.id : partes[1], partes[2], partes[3]);
     }
-    else if (partes[0] === 'club') vistaClub(partes[1]);
+    else if (partes[0] === 'club') {
+      const club = clubPorRuta(partes[1]);
+      // Los links viejos con el id (#/club/CL06) pasan a la direccion con nombre.
+      if (club && partes[1] !== club.slug) history.replaceState(null, '', '#/club/' + encodeURIComponent(club.slug));
+      vistaClub(club ? club.slug : partes[1]);
+    }
     else if (partes[0] === 'torneos') { vistaTorneos(); const a = document.querySelector('[data-nav="torneos"]'); if (a) a.setAttribute('aria-current', 'page'); }
     else if (partes[0] === 'torneo') {
       const k = String(partes[1] || '').toLowerCase();
